@@ -12,6 +12,8 @@ WORKDIR /w
 RUN git clone --depth 1 https://github.com/storytold/craft-fonts /w/craft-fonts
 COPY . /w/figcraft
 WORKDIR /w/figcraft/apps/figcraft-web
+# The VPS cannot reliably download binaryen (wasm-opt) from GitHub, so skip that optional size step.
+RUN sed -i 's/data-wasm-opt="z"/data-wasm-opt="0"/' index.html && grep -c 'data-wasm-opt="0"' index.html
 RUN for i in 1 2 3 4 5; do trunk build --release && exit 0; echo "trunk build failed (attempt $i), retrying"; sleep 15; done; exit 1
 
 FROM nginx:alpine
