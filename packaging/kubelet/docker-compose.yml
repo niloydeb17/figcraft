@@ -1,0 +1,22 @@
+# FigCraft on kubelet.cloud: the web editor (built from this repository) and the collaboration
+# server behind one host name. Deployed by Dokploy (Compose, GitHub provider) on every push to main.
+services:
+  server:
+    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: packaging/server/Dockerfile
+    volumes:
+      - figcraft-data:/data
+      - ./server.toml:/etc/figcraft-server/server.toml:ro
+
+  web:
+    restart: unless-stopped
+    depends_on:
+      - server
+    build:
+      context: ../..
+      dockerfile: packaging/web/Dockerfile.kubelet
+
+volumes:
+  figcraft-data:
