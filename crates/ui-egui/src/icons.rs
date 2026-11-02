@@ -24,6 +24,7 @@ macro_rules! icons {
 }
 
 mod draw;
+mod figma;
 
 pub use draw::{paint, paint_outlines};
 
