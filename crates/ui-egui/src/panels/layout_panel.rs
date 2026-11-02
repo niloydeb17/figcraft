@@ -14,8 +14,9 @@ use crate::FigApp;
 use crate::a11y::Tip;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
-use crate::right::{block, common, menu_item, menu_popup, row};
-use crate::theme::{ACCENT, Tokens, regular};
+use crate::right::{block, common, menu_check, menu_item, menu_popup, row};
+use crate::theme::{Tokens, regular, semibold};
+use crate::toolbar::DESIGN_BLUE;
 use crate::widgets::{self, FIELD_H, Lead};
 
 /// Most tracks listed in the panel (the rest are still laid out; edit them through commands).
@@ -39,17 +40,17 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &
     // layers inside it override their size and resizing, not their place in the layout.
     let facts = crate::right::in_instance(ui.ctx(), doc, sel);
     let (in_instance, nested) = (facts.any, facts.nested);
-    let btns: Vec<(Icon, &str)> = if in_instance {
-        vec![]
-    } else if layout_containers && no_al {
+    let btns: Vec<(Icon, &str)> = if layout_containers && no_al && !in_instance {
         vec![(Icon::Plus, crate::shortcuts::tip(tr("Add auto layout"), "layout.add"))]
-    } else if has_al {
-        vec![(Icon::Minus, crate::shortcuts::tip(tr("Remove auto layout"), "layout.remove"))]
     } else {
         vec![]
     };
-    if widgets::section_header(ui, title, &btns, false).is_some() {
-        app.run(if has_al { "layout.remove" } else { "layout.add" }, json!({"ids": ids}));
+    if has_al {
+        if auto_layout_heading(ui) && !in_instance {
+            app.run("layout.remove", json!({"ids": ids}));
+        }
+    } else if widgets::section_header(ui, title, &btns, false).is_some() {
+        app.run("layout.add", json!({"ids": ids}));
     }
     let from_main = tr("In an instance, this comes from the main component");
     if let Some(Some(l)) = &al {
@@ -60,7 +61,6 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &
         alignment(app, ui, &ids, l);
         spacing(app, ui, &ids, l);
         ui.add_enabled_ui(!in_instance, |ui| {
-            advanced(app, ui, &ids, l);
             if l.mode == LayoutMode::Grid && sel.len() == 1 {
                 tracks(app, ui, doc, &ids);
             }
@@ -83,25 +83,63 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &
     }
 }
 
+/// The "Auto layout" heading: the title and, at the margin, the kit's button for the section being on
+/// (a tinted square); clicking it removes auto layout. True when clicked.
+fn auto_layout_heading(ui: &mut Ui) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+    ui.painter().text(pos2(r.min.x + widgets::PAD, r.center().y), Align2::LEFT_CENTER, tr("Auto layout"), semibold(11.0), t.text);
+    let b = Rect::from_min_size(pos2(r.max.x - widgets::PAD_RIGHT - 24.0, r.center().y - 12.0), vec2(24.0, 24.0));
+    let resp = ui.interact(b, ui.scope_id().with("al_toggle"), Sense::click()).tip(crate::shortcuts::tip(tr("Remove auto layout"), "layout.remove"));
+    let tint = DESIGN_BLUE.gamma_multiply(if resp.hovered() { 0.32 } else { 0.22 });
+    ui.painter().rect_filled(b, CornerRadius::same(5), tint);
+    icons::paint(ui.painter(), Rect::from_center_size(b.center(), vec2(16.0, 16.0)), Icon::AutoLayout, DESIGN_BLUE);
+    resp.clicked()
+}
+
+/// A 24 pt icon button that, switched on, takes the kit's blue tint (the glyph in blue on it).
+fn kit_toggle(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+    let bg = if on {
+        DESIGN_BLUE.gamma_multiply(if resp.hovered() { 0.32 } else { 0.22 })
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(r, CornerRadius::same(5), bg);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, if on { DESIGN_BLUE } else { t.icon });
+    let resp = resp.tip(tip);
+    if on {
+        crate::a11y::toggle(&resp, tip, true);
+    }
+    resp
+}
+
+/// The Flow row: free-form (no auto layout), vertical, horizontal and grid in one switch, and the
+/// wrap button beside it.
 fn direction(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
+    widgets::sublabels(ui, tr("Flow"), None);
     row(ui, 32.0, |ui| {
-        let items = [(Icon::LayoutV, tr("Vertical")), (Icon::LayoutH, tr("Horizontal")), (Icon::LayoutGrid, tr("Grid"))];
+        let items =
+            [(Icon::LayoutFree, tr("Free-form")), (Icon::FlowV, tr("Vertical")), (Icon::FlowH, tr("Horizontal")), (Icon::FlowGrid, tr("Grid"))];
         let active = match l.mode {
-            LayoutMode::Vertical => 0,
-            LayoutMode::Horizontal => 1,
-            LayoutMode::Grid => 2,
+            LayoutMode::Vertical => 1,
+            LayoutMode::Horizontal => 2,
+            LayoutMode::Grid => 3,
         };
-        // The switch fills the row: its three cells share what the wrap button leaves, so the last
-        // cell and the button end at the panel's margin.
-        let wrap = if l.mode != LayoutMode::Grid { 24.0 + widgets::GUTTER } else { 0.0 };
-        let cell = (ui.available_width() - wrap) / items.len() as f32;
-        if let Some(i) = widgets::segmented(ui, &items, Some(active), cell) {
-            // Wrap carries over between the flows: rows of a horizontal one, columns of a vertical one.
-            let mode = ["vertical", "horizontal", "grid"].get(i).copied().unwrap_or("grid");
-            app.set_props(ids, json!({"layout": mode}));
+        if let Some(i) = widgets::segmented_kit(ui, &items, Some(active), 46.0) {
+            if i == 0 {
+                app.run("layout.remove", json!({"ids": ids}));
+            } else {
+                // Wrap carries over between the flows: rows of a horizontal one, columns of a vertical one.
+                let mode = ["", "vertical", "horizontal", "grid"].get(i).copied().unwrap_or("grid");
+                app.set_props(ids, json!({"layout": mode}));
+            }
         }
         if l.mode != LayoutMode::Grid {
-            let resp = icons::button(ui, Icon::LayoutWrap, 24.0, l.wrap, tr("Wrap"));
+            let resp = kit_toggle(ui, Icon::FlowWrap, l.wrap, tr("Wrap"));
             crate::a11y::toggle(&resp, tr("Wrap"), l.wrap);
             if resp.clicked() {
                 app.set_props(ids, json!({"wrap": !l.wrap}));
@@ -114,6 +152,7 @@ fn direction(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
 /// button, the min and max field leads).
 struct Axis {
     sizing: &'static str,
+    sizing_name: &'static str,
     min: &'static str,
     max: &'static str,
     add_min: &'static str,
@@ -126,6 +165,7 @@ struct Axis {
 const AXES: [Axis; 2] = [
     Axis {
         sizing: "sizingH",
+        sizing_name: tr_noop("Horizontal resizing"),
         min: "minWidth",
         max: "maxWidth",
         add_min: tr_noop("Add min width"),
@@ -136,6 +176,7 @@ const AXES: [Axis; 2] = [
     },
     Axis {
         sizing: "sizingV",
+        sizing_name: tr_noop("Vertical resizing"),
         min: "minHeight",
         max: "maxHeight",
         add_min: tr_noop("Add min height"),
@@ -164,87 +205,36 @@ fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has
     let h_of = |n: &Node| (n.height * 100.0).round() / 100.0;
     let (w, h) = (common(doc, sel, w_of), common(doc, sel, h_of));
     let col = widgets::col_width(ui.available_width());
+    let parent_al = sel.iter().all(|i| parent_of(doc, *i).is_some_and(|p| p.layout.is_some()));
+    let is_text = sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_))));
+    // Sizing (Fixed / Hug / Fill) and the min/max limits apply to auto layout frames, their
+    // children and text; absolute children neither fill nor limit.
+    let can_size = has_al || parent_al || is_text;
+    let can_fill = parent_al && crate::selection_cache::every(doc, sel, |n| !n.child_layout.absolute);
+    let can_limit = has_al || can_fill;
     widgets::sublabels(ui, tr("Dimensions"), None);
     row(ui, 32.0, |ui| {
-        let e = crate::variable_ui::number_field_mixed(app, ui, &ids, "width", Id::unique("lay_w"), Lead::Text("W"), w, "", col);
-        app.field_of(&ids, "width", e, w_of, |v| json!(v.max(0.0)));
-        let e = crate::variable_ui::number_field_mixed(app, ui, &ids, "height", Id::unique("lay_h"), Lead::Text("H"), h, "", col);
-        app.field_of(&ids, "height", e, h_of, |v| json!(v.max(0.0)));
+        for (ax, axis) in AXES.iter().enumerate() {
+            let horizontal = ax == 0;
+            let (lead, value, id) = if horizontal { ("W", w, "lay_w") } else { ("H", h, "lay_h") };
+            let (field_key, shown): (&str, fn(&Node) -> f64) =
+                if horizontal { ("width", |n| (n.width * 100.0).round() / 100.0) } else { ("height", |n| (n.height * 100.0).round() / 100.0) };
+            // Where the field lands: the sizing menu's chevron sits over its right end.
+            let field =
+                Rect::from_min_size(pos2(ui.available_rect_before_wrap().min.x, ui.max_rect().center().y - FIELD_H / 2.0), vec2(col, FIELD_H));
+            let e = crate::variable_ui::number_field_mixed(app, ui, &ids, field_key, Id::unique(id), Lead::Text(lead), value, "", col);
+            app.field_of(&ids, field_key, e, shown, |v| json!(v.max(0.0)));
+            if can_size {
+                sizing_menu(app, ui, doc, sel, field, axis, horizontal, (has_al || is_text, can_fill, can_limit));
+            }
+        }
         let locked = common(doc, sel, |n| n.constrain_proportions).unwrap_or(false);
         let link = ui
-            .add_enabled_ui(!nested, |ui| {
-                icons::button(ui, if locked { Icon::LinkOn } else { Icon::LinkOff }, 24.0, locked, tr("Constrain proportions"))
-            })
+            .add_enabled_ui(!nested, |ui| kit_toggle(ui, Icon::LockAspect, locked, tr("Constrain proportions")))
             .inner
             .on_disabled_hover_text(from_main);
         if link.clicked() {
             app.set_props(&ids, json!({"constrainProportions": !locked}));
-        }
-    });
-    let parent_al = sel.iter().all(|i| parent_of(doc, *i).is_some_and(|p| p.layout.is_some()));
-    let is_text = sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_))));
-    if !(has_al || parent_al || is_text) {
-        return;
-    }
-    // Min/max apply to auto layout frames and their children; absolute children neither fill nor limit.
-    let can_fill = parent_al && crate::selection_cache::every(doc, sel, |n| !n.child_layout.absolute);
-    let can_limit = has_al || can_fill;
-    let first = sel.first().and_then(|i| doc.node(*i));
-    row(ui, 32.0, |ui| {
-        for (ax, axis) in AXES.iter().enumerate() {
-            let horizontal = ax == 0;
-            let cur = common(doc, sel, |n| if horizontal { n.child_layout.sizing_h } else { n.child_layout.sizing_v });
-            let any_limit =
-                sel.iter().filter_map(|i| doc.node(*i)).any(|n| limit(n, horizontal, true).is_some() || limit(n, horizontal, false).is_some());
-            // "Fill" here is the sizing (fill the container), not the paint.
-            let label = cur.map(|s| if s == Sizing::Fill { tr("Fill|sizing") } else { tr(s.label()) }).unwrap_or(tr("Mixed"));
-            let icon = match cur {
-                Some(Sizing::Hug) => Icon::Hug,
-                Some(Sizing::Fill) => Icon::FillContainer,
-                _ => Icon::Fixed,
-            };
-            let resp = widgets::dropdown(ui, label, col, Some(icon));
-            if any_limit {
-                // Limits set: tick marks on the sizing icon's ends.
-                let c = pos2(resp.rect.min.x + 14.0, resp.rect.center().y);
-                let tint = Tokens::get(ui.ctx()).icon_secondary;
-                for dx in [-8.5, 8.5] {
-                    ui.painter().line_segment([c + vec2(dx, -4.0), c + vec2(dx, 4.0)], Stroke::new(1.0, tint));
-                }
-            }
-            let current = first.map(|n| if horizontal { n.width } else { n.height }).unwrap_or(0.0);
-            let ids2 = ids.clone();
-            menu_popup(&resp).width(200.0).show(|ui| {
-                let mut opts = vec![(tr("Fixed"), "fixed")];
-                if has_al || is_text {
-                    opts.push((tr("Hug contents"), "hug"));
-                }
-                if can_fill {
-                    opts.push((tr("Fill container"), "fill"));
-                }
-                for (l, v) in opts {
-                    if menu_item(ui, l, "") {
-                        app.set_props(&ids2, json!({axis.sizing: v}));
-                        ui.close();
-                    }
-                }
-                if can_limit {
-                    ui.separator();
-                    let (min, max) = (first.and_then(|n| limit(n, horizontal, true)), first.and_then(|n| limit(n, horizontal, false)));
-                    if min.is_none() && menu_item(ui, tr(axis.add_min), "") {
-                        app.set_props(&ids2, json!({axis.min: current}));
-                        ui.close();
-                    }
-                    if max.is_none() && menu_item(ui, tr(axis.add_max), "") {
-                        app.set_props(&ids2, json!({axis.max: current}));
-                        ui.close();
-                    }
-                    if any_limit && menu_item(ui, tr("Remove min and max"), "") {
-                        app.set_props(&ids2, json!({axis.min: null, axis.max: null}));
-                        ui.close();
-                    }
-                }
-            });
         }
     });
     if can_limit {
@@ -252,6 +242,66 @@ fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has
             limit_row(app, ui, doc, sel, ax == 0, axis, col);
         }
     }
+}
+
+/// One axis' sizing: its name (Hug, Fill) before the chevron at the field's end, and the menu the
+/// chevron opens (Fixed, Hug contents, Fill container, min and max limits). `can`: hug, fill, limit.
+fn sizing_menu(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], field: Rect, axis: &Axis, horizontal: bool, can: (bool, bool, bool)) {
+    let t = Tokens::get(ui.ctx());
+    let (can_hug, can_fill, can_limit) = can;
+    let cur = common(doc, sel, |n| if horizontal { n.child_layout.sizing_h } else { n.child_layout.sizing_v });
+    let any_limit = sel.iter().filter_map(|i| doc.node(*i)).any(|n| limit(n, horizontal, true).is_some() || limit(n, horizontal, false).is_some());
+    // "Fill" here is the sizing (fill the container), not the paint.
+    let name = match cur {
+        Some(Sizing::Hug) => tr("Hug"),
+        Some(Sizing::Fill) => tr("Fill|sizing"),
+        Some(Sizing::Fixed) => "",
+        None => tr("Mixed"),
+    };
+    let chevron = Rect::from_min_size(pos2(field.max.x - 24.0, field.min.y), vec2(24.0, FIELD_H));
+    let resp = ui.interact(chevron, ui.scope_id().with(("sizing", horizontal)), Sense::click());
+    crate::a11y::combo(&resp, tr(axis.sizing_name), name, crate::a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(chevron.shrink(1.0), CornerRadius::same(4), t.hover);
+    }
+    if !name.is_empty() {
+        ui.painter().text(pos2(chevron.min.x, field.center().y), Align2::RIGHT_CENTER, name, regular(11.0), t.text_secondary);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(chevron.center(), vec2(16.0, 16.0)), Icon::Chevron, t.icon);
+    let first = sel.first().and_then(|i| doc.node(*i));
+    let current = first.map(|n| if horizontal { n.width } else { n.height }).unwrap_or(0.0);
+    let ids = sel.to_vec();
+    menu_popup(&resp).width(200.0).show(|ui| {
+        let mut opts = vec![(tr("Fixed"), "fixed")];
+        if can_hug {
+            opts.push((tr("Hug contents"), "hug"));
+        }
+        if can_fill {
+            opts.push((tr("Fill container"), "fill"));
+        }
+        for (l, v) in opts {
+            if menu_item(ui, l, "") {
+                app.set_props(&ids, json!({axis.sizing: v}));
+                ui.close();
+            }
+        }
+        if can_limit {
+            ui.separator();
+            let (min, max) = (first.and_then(|n| limit(n, horizontal, true)), first.and_then(|n| limit(n, horizontal, false)));
+            if min.is_none() && menu_item(ui, tr(axis.add_min), "") {
+                app.set_props(&ids, json!({axis.min: current}));
+                ui.close();
+            }
+            if max.is_none() && menu_item(ui, tr(axis.add_max), "") {
+                app.set_props(&ids, json!({axis.max: current}));
+                ui.close();
+            }
+            if any_limit && menu_item(ui, tr("Remove min and max"), "") {
+                app.set_props(&ids, json!({axis.min: null, axis.max: null}));
+                ui.close();
+            }
+        }
+    });
 }
 
 /// The min/max fields of one axis (shown once either is set): min in the first column, max in the
@@ -293,13 +343,30 @@ fn add_slot(ui: &mut Ui, label: &str, tip: &str, width: f32) -> egui::Response {
     resp
 }
 
-/// Draw the 3×3 main/cross alignment grid, auto-gap modes, grid column/row gaps and the
-/// horizontal baseline checkbox.
+/// One selected cell of the alignment grid: the kit's three bars (their heights 7, 10 and 5 of a
+/// 16 pt box), upright in a horizontal flow and lying in a vertical one.
+fn alignment_mark(ui: &Ui, c: egui::Pos2, upright: bool) {
+    for (x, len, off) in [(3.0, 7.0, 4.5), (7.0, 10.0, 3.0), (11.0, 5.0, 5.5)] {
+        let r = if upright {
+            Rect::from_min_size(pos2(c.x - 8.0 + x, c.y - 8.0 + off), vec2(2.0, len))
+        } else {
+            Rect::from_min_size(pos2(c.x - 8.0 + off, c.y - 8.0 + x), vec2(len, 2.0))
+        };
+        ui.painter().rect_filled(r, CornerRadius::same(1), DESIGN_BLUE);
+    }
+}
+
+/// The Alignment and Gap row: the 3×3 main/cross alignment grid, the gap beside it (with its auto
+/// modes behind the chevron; the column and row gaps of a grid), and the settings button.
 fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
     let t = Tokens::get(ui.ctx());
     let grid_mode = l.mode == LayoutMode::Grid;
-    block(ui, 76.0, 6.0, |ui| {
-        let (grid, _) = ui.allocate_exact_size(vec2(72.0, 64.0), Sense::hover());
+    widgets::sublabels(ui, tr("Alignment"), Some(tr("Gap")));
+    block(ui, 64.0, 0.0, |ui| {
+        let inner = ui.max_rect();
+        let col = widgets::col_width(inner.width() + widgets::PAD + widgets::PAD_RIGHT);
+        let grid = Rect::from_min_size(pos2(inner.min.x, inner.min.y + 4.0), vec2(col, 56.0));
+        ui.allocate_rect(grid, Sense::hover());
         ui.painter().rect_filled(grid, CornerRadius::same(5), t.field);
         let horizontal = l.mode != LayoutMode::Vertical;
         let cur_main = match l.main_align {
@@ -317,21 +384,22 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             CrossAlign::Center => 1,
             CrossAlign::Max => 2,
         };
+        let cells = Rect::from_min_size(grid.min + vec2(1.0, 5.0), vec2(col - 2.0, 46.0));
+        let (cw, ch) = (cells.width() / 3.0, cells.height() / 3.0);
         for yi in 0..3 {
             for xi in 0..3 {
-                let c = pos2(grid.min.x + 12.0 + xi as f32 * 24.0, grid.min.y + 10.0 + yi as f32 * 22.0);
-                let r = Rect::from_center_size(c, vec2(22.0, 20.0));
+                let r = Rect::from_min_size(cells.min + vec2(xi as f32 * cw, yi as f32 * ch), vec2(cw, ch));
                 let resp = ui.interact(r, Id::unique(("al_grid", xi, yi)), Sense::click());
                 let (main_i, cross_i) = if horizontal { (xi, yi) } else { (yi, xi) };
                 let on = (cur_main == main_i || cur_main == 9) && (cur_cross == cross_i || cur_cross == 9);
                 if on {
-                    ui.painter().rect_filled(
-                        Rect::from_center_size(c, vec2(if horizontal { 4.0 } else { 12.0 }, if horizontal { 12.0 } else { 4.0 })),
-                        CornerRadius::same(1),
-                        ACCENT,
-                    );
+                    alignment_mark(ui, r.center(), horizontal);
                 } else {
-                    ui.painter().circle_filled(c, if resp.hovered() { 2.5 } else { 1.5 }, if resp.hovered() { ACCENT } else { t.text_tertiary });
+                    ui.painter().circle_filled(
+                        r.center(),
+                        if resp.hovered() { 2.0 } else { 1.0 },
+                        if resp.hovered() { DESIGN_BLUE } else { t.text_tertiary },
+                    );
                 }
                 if resp.clicked() {
                     let m = ["min", "center", "max"][main_i];
@@ -342,53 +410,60 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 }
             }
         }
-        ui.vertical(|ui| {
-            // The alignment picker on the left, the gap and its mode stacked to its right, both
-            // ending where the panel's fields do (the button column at a row's end stays free).
-            let w = (ui.available_width() - 32.0).max(40.0);
-            if grid_mode {
-                // Grid: gap between columns and between rows.
-                let e = crate::variable_ui::number_field(
-                    app,
-                    ui,
-                    ids,
-                    "columnGap",
-                    Id::unique("al_gap"),
-                    Lead::Icon(Icon::Gap, tr("Column gap")),
-                    Some(l.gap),
-                    "",
-                    w,
-                );
-                app.field(ids, "columnGap", e, |v| json!(v.max(0.0)));
-                ui.add_space(8.0);
-                let e = crate::variable_ui::number_field(
-                    app,
-                    ui,
-                    ids,
-                    "rowGap",
-                    Id::unique("al_rowgap"),
-                    Lead::Icon(Icon::DistributeV, tr("Row gap")),
-                    Some(l.cross_gap),
-                    "",
-                    w,
-                );
-                app.field(ids, "rowGap", e, |v| json!(v.max(0.0)));
-                return;
-            }
+        // The gap: beside the grid, level with its top.
+        let right = Rect::from_min_size(pos2(grid.max.x + widgets::GUTTER, grid.min.y), vec2(col, 56.0));
+        let mut gap_ui = ui.new_child(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::top_down(egui::Align::Min)));
+        gap_ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+        let ui2 = &mut gap_ui;
+        if grid_mode {
+            // Grid: gap between columns and between rows.
+            let e = crate::variable_ui::number_field(
+                app,
+                ui2,
+                ids,
+                "columnGap",
+                Id::unique("al_gap"),
+                Lead::Icon(Icon::Gap, tr("Column gap")),
+                Some(l.gap),
+                "",
+                col,
+            );
+            app.field(ids, "columnGap", e, |v| json!(v.max(0.0)));
+            let e = crate::variable_ui::number_field(
+                app,
+                ui2,
+                ids,
+                "rowGap",
+                Id::unique("al_rowgap"),
+                Lead::Icon(Icon::GapV, tr("Row gap")),
+                Some(l.cross_gap),
+                "",
+                col,
+            );
+            app.field(ids, "rowGap", e, |v| json!(v.max(0.0)));
+        } else {
             let auto = l.main_align.is_auto_gap();
-            let gap_icon = if l.mode == LayoutMode::Vertical { Icon::DistributeV } else { Icon::Gap };
+            let gap_icon = if l.mode == LayoutMode::Vertical { Icon::GapV } else { Icon::Gap };
             let (shown, lead) = ((!auto).then_some(l.gap), Lead::Icon(gap_icon, tr("Gap between items")));
-            let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::unique("al_gap"), shown, w, tr("Auto"), lead, "");
+            let field = Rect::from_min_size(ui2.max_rect().min, vec2(col, FIELD_H));
+            let e = crate::variable_ui::number_field_or(app, ui2, ids, "gap", Id::unique("al_gap"), shown, col, tr("Auto"), lead, "");
             app.field(ids, "gap", e, |v| json!(v));
-            ui.add_space(8.0);
+            // The auto modes behind the chevron at the field's end, set off by a hairline.
+            let chevron = Rect::from_min_size(pos2(field.max.x - 25.0, field.min.y), vec2(25.0, FIELD_H));
+            ui2.painter()
+                .line_segment([chevron.left_top() + vec2(0.0, 1.0), chevron.left_bottom() - vec2(0.0, 1.0)], egui::Stroke::new(1.0, t.border));
+            let resp = ui2.interact(chevron, ui2.scope_id().with("gap_mode"), Sense::click());
             let label = match l.main_align {
                 MainAlign::SpaceBetween => tr("Space between"),
                 MainAlign::SpaceAround => tr("Space around"),
                 MainAlign::SpaceEvenly => tr("Space evenly"),
                 _ => tr("Fixed gap"),
             };
-            let resp = widgets::dropdown(ui, label, w, None);
             crate::a11y::combo(&resp, tr("Auto gap"), label, crate::a11y::menu_open(&resp));
+            if resp.hovered() {
+                ui2.painter().rect_filled(chevron.shrink2(vec2(1.0, 1.0)), CornerRadius::same(4), t.hover);
+            }
+            icons::paint(ui2.painter(), Rect::from_center_size(chevron.center(), vec2(16.0, 16.0)), Icon::Chevron, t.icon);
             menu_popup(&resp).show(|ui| {
                 let modes = [
                     (tr("Fixed"), "min"),
@@ -403,16 +478,49 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                     }
                 }
             });
-        });
+        }
+        // Auto layout settings: strokes, canvas stacking and text baselines.
+        let button = Rect::from_min_size(pos2(inner.max.x - 24.0, inner.min.y + 4.0), vec2(24.0, 24.0));
+        let resp = ui.interact(button, ui.scope_id().with("al_settings"), Sense::click()).tip(tr("Auto layout settings"));
+        if resp.hovered() {
+            ui.painter().rect_filled(button, CornerRadius::same(5), t.hover);
+        }
+        icons::paint(ui.painter(), Rect::from_center_size(button.center(), vec2(16.0, 16.0)), Icon::LayoutSettings, t.icon);
+        menu_popup(&resp).width(200.0).show(|ui| settings_menu(app, ui, ids, l));
     });
+}
+
+/// The Auto layout settings menu: whether strokes take up space, which child paints on top where
+/// children overlap (canvas stacking; the layer order stays), and, in a horizontal stack, text
+/// baselines.
+fn settings_menu(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
+    let t = Tokens::get(ui.ctx());
+    let heading = |ui: &mut Ui, text: &str| {
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+        ui.painter().text(pos2(r.min.x + 12.0, r.center().y), Align2::LEFT_CENTER, text, regular(10.0), t.menu_dim);
+    };
+    heading(ui, tr("Strokes"));
+    for (v, label) in [(true, tr("Included in layout")), (false, tr("Excluded from layout"))] {
+        if menu_check(ui, l.strokes_included == v, label, "") {
+            app.set_props(ids, json!({"strokesIncluded": v}));
+            ui.close();
+        }
+    }
+    heading(ui, tr("Canvas stacking"));
+    for (v, label) in [(false, tr("Last on top")), (true, tr("First on top"))] {
+        if menu_check(ui, l.reverse_z == v, label, "") {
+            app.set_props(ids, json!({"reverseZ": v}));
+            ui.close();
+        }
+    }
     // Text baselines: horizontal stacks only.
     if l.mode == LayoutMode::Horizontal {
+        ui.separator();
         let on = l.cross_align == CrossAlign::Baseline;
-        row(ui, 28.0, |ui| {
-            if widgets::checkbox(ui, on, tr("Align text baselines")) {
-                app.set_props(ids, json!({"crossAlign": if on { "min" } else { "baseline" }}));
-            }
-        });
+        if menu_check(ui, on, tr("Align text baselines"), "") {
+            app.set_props(ids, json!({"crossAlign": if on { "min" } else { "baseline" }}));
+            ui.close();
+        }
     }
 }
 
@@ -427,6 +535,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             ui.data_mut(|d| d.insert_temp(Id::unique("indep_padding"), !open));
         }
     };
+    widgets::sublabels(ui, tr("Padding"), None);
     if open {
         // `l` is the selection's common layout, so its sides are common too. `k` indexes
         // [top, right, bottom, left].
@@ -522,43 +631,6 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             app.field(ids, "gridRows", e, |v| json!(v.max(1.0)));
         });
     }
-}
-
-/// Whether the frame's inside stroke takes up space, and which child paints on top where children
-/// overlap (canvas stacking; the layer order stays).
-fn advanced(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
-    let col = widgets::col_width(ui.available_width());
-    widgets::sublabels(ui, tr("Strokes"), Some(tr("Canvas stacking")));
-    row(ui, 32.0, |ui| {
-        // (value, menu item, the field's shorter label)
-        let menus = [
-            (
-                "strokesIncluded",
-                tr("Strokes"),
-                l.strokes_included,
-                [(true, tr("Included in layout"), tr("Included")), (false, tr("Excluded from layout"), tr("Excluded"))],
-            ),
-            (
-                "reverseZ",
-                tr("Canvas stacking"),
-                l.reverse_z,
-                [(false, tr("Last on top"), tr("Last on top")), (true, tr("First on top"), tr("First on top"))],
-            ),
-        ];
-        for (key, name, cur, options) in menus {
-            let label = options.iter().find(|o| o.0 == cur).map_or("", |o| o.2);
-            let resp = widgets::dropdown(ui, label, col, None);
-            crate::a11y::combo(&resp, name, label, crate::a11y::menu_open(&resp));
-            menu_popup(&resp).show(|ui| {
-                for (v, l, _) in options {
-                    if menu_item(ui, l, "") {
-                        app.set_props(ids, json!({key: v}));
-                        ui.close();
-                    }
-                }
-            });
-        }
-    });
 }
 
 /// Track sizes of a single grid frame: one row per column / row with its size and sizing.

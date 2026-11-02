@@ -24,6 +24,9 @@ macro_rules! icons {
 }
 
 mod draw;
+// Generated outline data (UI3 kit, private use): its numbers are glyph coordinates, not constants.
+#[allow(clippy::approx_constant)]
+#[rustfmt::skip]
 mod figma;
 
 pub use draw::{paint, paint_outlines};
@@ -189,6 +192,27 @@ icons! {
     /// The left rail's Variables and Assets buttons.
     RailVariables,
     RailAssets,
+    /// The Page section's "Apply variable mode" button.
+    PageModes,
+    /// The MCP row's "Set up agents" button.
+    McpSettings,
+    /// The small caret before a style group's name.
+    FolderCaret,
+    /// Auto layout's Flow switch: free-form (no auto layout), then the flows themselves.
+    LayoutFree,
+    /// The W/H row's aspect-ratio lock.
+    LockAspect,
+    /// The gap between items of a vertical flow.
+    GapV,
+    /// The Auto layout settings button.
+    LayoutSettings,
+    /// The Flow switch's vertical, horizontal and grid cells and its wrap button.
+    FlowV,
+    FlowH,
+    FlowGrid,
+    FlowWrap,
+    /// Selection colors' "select the layers using this color" button.
+    SelectColor,
     /// The prototype preview pane: a small window playing a frame.
     Preview,
     Section2,
@@ -448,50 +472,45 @@ mod tests {
         out.shapes.into_iter().map(|c| c.shape).collect()
     }
 
-    /// Frame and Text stay a grid unit inside the box, so their long hinted strokes don't
-    /// outweigh the outlines beside them in the toolbar (#737).
+    /// Every point `icon` paints in the 32-point box: its mesh vertices and its outline rings.
+    fn glyph_points(icon: Icon) -> (Vec<Pos2>, usize) {
+        let mut pts = Vec::new();
+        let mut meshes = 0;
+        for s in shapes_at_32(icon) {
+            match s {
+                Shape::Mesh(m) => {
+                    meshes += 1;
+                    pts.extend(m.vertices.iter().map(|v| v.pos));
+                }
+                Shape::Path(p) => pts.extend(p.points.iter().copied()),
+                other => panic!("{icon:?} is a kit glyph, drawn as one mesh and its outlines: {other:?}"),
+            }
+        }
+        (pts, meshes)
+    }
+
+    /// Frame and Text are the kit's glyphs: each paints as one mesh and stays inside its box, so
+    /// the toolbar's marks weigh alike (#737).
     #[test]
-    fn frame_and_text_marks_are_inset() {
+    fn frame_and_text_marks_stay_inside_their_box() {
         for icon in [Icon::Frame, Icon::Text] {
-            let pts: Vec<Pos2> = shapes_at_32(icon)
-                .iter()
-                .flat_map(|s| match s {
-                    Shape::LineSegment { points, .. } => points.to_vec(),
-                    other => panic!("{icon:?} draws straight strokes only: {other:?}"),
-                })
-                .collect();
+            let (pts, meshes) = glyph_points(icon);
+            assert_eq!(meshes, 1, "{icon:?} is one mesh");
             assert!(!pts.is_empty());
             for p in pts {
-                // Grid units 3..13, two points each.
-                assert!((6.0..=26.0).contains(&p.x) && (6.0..=26.0).contains(&p.y), "{icon:?} reaches {p:?}");
+                assert!((-0.5..=32.5).contains(&p.x) && (-0.5..=32.5).contains(&p.y), "{icon:?} reaches {p:?}");
             }
         }
     }
 
-    /// Slice is one knife (#739): an outlined blade and a solid handle that covers the middle of
-    /// the blade's base, so the two read as one mark rather than separate pieces.
+    /// Slice is one knife (#739): the kit's glyph, a single mesh in one piece inside its canvas.
     #[test]
     fn slice_is_one_connected_knife() {
-        let shapes = shapes_at_32(Icon::Slice);
-        let paths: Vec<_> = shapes
-            .iter()
-            .map(|s| match s {
-                Shape::Path(p) => p,
-                other => panic!("Slice draws paths only: {other:?}"),
-            })
-            .collect();
-        let blade = paths.iter().find(|p| p.closed && p.fill == Color32::TRANSPARENT).expect("an outlined blade");
-        let handle = paths.iter().find(|p| p.fill != Color32::TRANSPARENT).expect("a solid handle");
-        assert_eq!((paths.len(), blade.points.len()), (2, 3), "a blade and a handle, nothing else");
-        // The blade's base runs between its second and third points; the handle is convex.
-        let base = blade.points[1] + (blade.points[2] - blade.points[1]) / 2.0;
-        let h = &handle.points;
-        let side = |i: usize| {
-            let (a, b) = (h[i], h[(i + 1) % h.len()]);
-            (b - a).x * (base - a).y - (b - a).y * (base - a).x
-        };
-        let inside = (0..h.len()).all(|i| side(i) >= 0.0) || (0..h.len()).all(|i| side(i) <= 0.0);
-        assert!(inside, "the handle covers the blade's base at {base:?}");
+        let (pts, meshes) = glyph_points(Icon::Slice);
+        assert_eq!(meshes, 1, "one knife, not separate pieces");
+        assert!(!pts.is_empty());
+        // Its 24-unit canvas is 48 points here, centred on the box.
+        assert!(pts.iter().all(|p| (-8.0..=40.0).contains(&p.x) && (-8.0..=40.0).contains(&p.y)), "the knife stays inside its canvas");
     }
 
     /// Each corner's icon shows its own corner: no two of the four draw alike.

@@ -52,6 +52,8 @@ mod a11y_tests;
 #[cfg(test)]
 mod async_dialog_tests;
 #[cfg(test)]
+mod auto_layout_panel_tests;
+#[cfg(test)]
 mod blend_preview_tests;
 #[cfg(test)]
 mod branch_ui_tests;

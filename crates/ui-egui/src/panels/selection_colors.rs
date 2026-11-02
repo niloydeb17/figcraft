@@ -3,18 +3,19 @@
 
 use std::sync::Arc;
 
-use egui::{Id, Ui};
+use egui::{Id, Rect, Ui};
 use figcraft_color::Color;
 use figcraft_doc::{Document, NodeId, StyleKind, VariableType};
 use figcraft_engine::selection_colors::{PaintTarget, SelectionColor, bind_refusal, collect, in_scope};
 use serde_json::json;
 
+use crate::FigApp;
 use crate::a11y::Tip;
 use crate::colorpicker::PickerTarget;
 use crate::i18n::tr;
 use crate::icons::{self, Icon};
-use crate::theme::Tokens;
-use crate::{FigApp, widgets};
+use crate::theme::{Tokens, regular};
+use crate::widgets::{self, FIELD_H, FieldEdit, Lead};
 
 #[derive(Clone)]
 struct Cache {
@@ -75,19 +76,31 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
             for group in &colors[range] {
                 ui.push_id((&group.targets, "selection_color"), |ui| {
                     crate::right::row(ui, 32.0, |ui| {
-                        let swatch = widgets::swatch(ui, &group.paint, 24.0).tip(tr("Edit colour"));
+                        // The Fill row's field: the swatch, then the hex and opacity (or the name of the
+                        // style or variable), and the row's two buttons as one group at the margin.
+                        let (field, _) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 60.0, FIELD_H), egui::Sense::hover());
+                        ui.painter().rect_filled(field, egui::CornerRadius::same(5), t.field);
+                        let sw = Rect::from_min_size(field.min + egui::vec2(4.0, (FIELD_H - 16.0) / 2.0), egui::vec2(16.0, 16.0));
+                        widgets::paint_swatch(ui.painter(), sw, &group.paint);
+                        let swatch = ui.interact(sw.expand(2.0), ui.scope_id().with("swatch"), egui::Sense::click()).tip(tr("Edit colour"));
                         toggle(app, group.targets.clone(), Some(&swatch));
-                        let width = (ui.available_width() - 116.0).max(40.0);
                         let linked_name = group
                             .style
                             .as_ref()
                             .and_then(|id| doc.style(id).map(|s| s.name.as_str()))
                             .or_else(|| group.variable.as_ref().and_then(|id| doc.variables.get_by_id(id).map(|v| v.name.as_str())));
-                        if let Some(name) = linked_name {
-                            let response = widgets::dropdown(ui, name, width, None);
-                            toggle(app, group.targets.clone(), Some(&response));
-                        } else if let Some(color) = group.paint.solid_color() {
-                            if let Some(hex) = widgets::text_field_named(ui, ui.scope_id().with("hex"), &color.to_hex(), width, tr("Color")) {
+                        let solid = group.paint.solid_color().filter(|_| linked_name.is_none());
+                        let text_end = if solid.is_some() { field.max.x - 52.0 } else { field.max.x - 6.0 };
+                        let text_r = Rect::from_min_max(egui::pos2(sw.max.x + 8.0, field.min.y), egui::pos2(text_end, field.max.y));
+                        if let Some(color) = solid {
+                            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
+                            if let Some(hex) = widgets::text_field_inline(
+                                &mut child,
+                                ui.scope_id().with("hex"),
+                                &color.to_hex(),
+                                text_r.shrink2(egui::vec2(0.0, 4.0)),
+                                regular(11.0),
+                            ) {
                                 if let Some(color) = Color::from_hex(&hex) {
                                     let mut paint = group.paint.clone();
                                     paint.kind = figcraft_color::PaintKind::Solid { color: color.with_alpha(1.0) };
@@ -99,66 +112,51 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                                     app.toast(tr("Invalid color"));
                                 }
                             }
-                        } else {
-                            let response = widgets::dropdown(ui, &widgets::paint_name(&group.paint), width, None);
-                            toggle(app, group.targets.clone(), Some(&response));
-                        }
-                        let alpha = format!("{}%", figcraft_doc::trim_num(f64::from(group.paint.opacity) * 100.0));
-                        if let Some(value) = widgets::text_field_named(ui, ui.scope_id().with("opacity"), &alpha, 44.0, tr("Opacity"))
-                            && let Ok(value) = value.trim().trim_end_matches('%').parse::<f32>()
-                            && value.is_finite()
-                        {
-                            let mut paint = group.paint.clone();
-                            paint.opacity = (value / 100.0).clamp(0.0, 1.0);
-                            app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
-                        }
-                        if linked_name.is_some() {
-                            let detach = if group.style.is_some() { tr("Detach style") } else { tr("Detach variable") };
-                            if icons::button(ui, Icon::Detach, 24.0, false, detach).clicked() {
-                                app.run("selection.detachColor", json!({"targets": group.targets}));
+                            // The opacity: the field's last 48 pt, set off by a hairline.
+                            let op_r = Rect::from_min_max(egui::pos2(field.max.x - 48.0, field.min.y), field.max);
+                            ui.painter().line_segment(
+                                [egui::pos2(op_r.min.x, field.min.y + 4.0), egui::pos2(op_r.min.x, field.max.y - 4.0)],
+                                egui::Stroke::new(1.0, t.panel),
+                            );
+                            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_r));
+                            let alpha = (f64::from(group.paint.opacity) * 100.0).round();
+                            if let Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true)) =
+                                widgets::number_field(&mut child, ui.scope_id().with("opacity"), Lead::None, Some(alpha), "%", 48.0, 1.0)
+                                && v.is_finite()
+                            {
+                                let mut paint = group.paint.clone();
+                                paint.opacity = (v / 100.0).clamp(0.0, 1.0) as f32;
+                                app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
                             }
                         } else {
-                            let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
-                            crate::right::menu_popup(&styles).show(|ui| {
-                                let mut any = false;
-                                for style in &doc.styles {
-                                    if !matches!(style.kind, StyleKind::Paint { .. }) {
-                                        continue;
-                                    }
-                                    any = true;
-                                    if crate::right::menu_item(ui, &style.name, "") {
-                                        app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
-                                        app.ui.picker = None;
-                                        ui.close();
-                                    }
-                                }
-                                if !any {
-                                    widgets::label(ui, tr("No color styles"), t.text_secondary);
-                                }
-                                let variables: Vec<_> = doc
-                                    .variables
-                                    .variables
-                                    .iter()
-                                    .filter(|v| {
-                                        v.kind == VariableType::Color
-                                            && bind_refusal(doc, &group.targets, &v.id).is_none()
-                                            && in_scope(doc, &group.targets, &v.id)
-                                    })
-                                    .collect();
-                                if !variables.is_empty() {
-                                    ui.separator();
-                                    widgets::label(ui, tr("Color variables"), t.text_secondary);
-                                }
-                                for v in variables {
-                                    if crate::right::menu_item(ui, &v.name, "") {
-                                        app.run("selection.bindColorVariable", json!({"targets": group.targets, "variable": v.id}));
-                                        app.ui.picker = None;
-                                        ui.close();
-                                    }
-                                }
-                            });
+                            // A style, a variable, a gradient or an image: its name, which opens the picker.
+                            let shown = linked_name.map_or_else(|| widgets::paint_name(&group.paint), str::to_string);
+                            let name = ui.interact(text_r, ui.scope_id().with("name"), egui::Sense::click()).on_hover_text(&shown);
+                            toggle(app, group.targets.clone(), Some(&name));
+                            ui.painter().with_clip_rect(text_r).text(
+                                egui::pos2(text_r.min.x, field.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &shown,
+                                regular(11.0),
+                                t.text,
+                            );
                         }
-                        if icons::button(ui, Icon::Move, 24.0, false, tr("Select layers with this color")).clicked() {
+                        let (first, select) = widgets::tight_end(ui, |ui| {
+                            let first = if linked_name.is_some() {
+                                let detach = if group.style.is_some() { tr("Detach style") } else { tr("Detach variable") };
+                                icons::button(ui, Icon::Detach, 24.0, false, detach).clicked()
+                            } else {
+                                let styles = icons::button(ui, Icon::Styles, 24.0, false, tr("Color styles"));
+                                color_styles_menu(app, &styles, doc, group);
+                                false
+                            };
+                            let select = icons::button(ui, Icon::SelectColor, 24.0, false, tr("Select layers with this color")).clicked();
+                            (first, select)
+                        });
+                        if first {
+                            app.run("selection.detachColor", json!({"targets": group.targets}));
+                        }
+                        if select {
                             app.run("selection.selectColor", json!({"targets": group.targets}));
                         }
                     });
@@ -168,6 +166,46 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
     });
     ui.add_space(8.0);
     widgets::separator(ui);
+}
+
+/// The row's Color styles button menu: the document's paint styles, then the colour variables the
+/// row's layers can bind.
+fn color_styles_menu(app: &mut FigApp, styles: &egui::Response, doc: &Arc<Document>, group: &SelectionColor) {
+    let t = Tokens::get(&styles.ctx);
+    crate::right::menu_popup(styles).show(|ui| {
+        let mut any = false;
+        for style in &doc.styles {
+            if !matches!(style.kind, StyleKind::Paint { .. }) {
+                continue;
+            }
+            any = true;
+            if crate::right::menu_item(ui, &style.name, "") {
+                app.run("selection.applyColorStyle", json!({"targets": group.targets, "style": style.id}));
+                app.ui.picker = None;
+                ui.close();
+            }
+        }
+        if !any {
+            widgets::label(ui, tr("No color styles"), t.text_secondary);
+        }
+        let variables: Vec<_> = doc
+            .variables
+            .variables
+            .iter()
+            .filter(|v| v.kind == VariableType::Color && bind_refusal(doc, &group.targets, &v.id).is_none() && in_scope(doc, &group.targets, &v.id))
+            .collect();
+        if !variables.is_empty() {
+            ui.separator();
+            widgets::label(ui, tr("Color variables"), t.text_secondary);
+        }
+        for v in variables {
+            if crate::right::menu_item(ui, &v.name, "") {
+                app.run("selection.bindColorVariable", json!({"targets": group.targets, "variable": v.id}));
+                app.ui.picker = None;
+                ui.close();
+            }
+        }
+    });
 }
 
 #[cfg(test)]

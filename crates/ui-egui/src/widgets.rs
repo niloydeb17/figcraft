@@ -834,6 +834,16 @@ pub fn segmented(ui: &mut Ui, items: &[(Icon, &str)], active: Option<usize>, cel
     })
 }
 
+/// [`segmented`] with the kit's 24 pt glyphs, for a switch whose cells are `cell` wide.
+pub fn segmented_kit(ui: &mut Ui, items: &[(Icon, &str)], active: Option<usize>, cell: f32) -> Option<usize> {
+    let names: Vec<&str> = items.iter().map(|(_, tip)| *tip).collect();
+    segments(ui, &names, active, cell, true, |ui, r, i, on, t| {
+        if let Some((icon, _)) = items.get(i) {
+            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), *icon, if on { t.icon } else { t.icon_secondary });
+        }
+    })
+}
+
 /// A choice between a few labelled options across the available width (the active one raised);
 /// returns the index clicked. A label too long for its cell ends with an ellipsis.
 pub fn segmented_text(ui: &mut Ui, labels: &[&str], active: usize) -> Option<usize> {

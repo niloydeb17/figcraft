@@ -25,6 +25,7 @@ pub(crate) mod dev_panel;
 mod effects;
 mod inspect;
 mod menu;
+mod page;
 mod paints;
 mod stroke;
 
@@ -38,6 +39,7 @@ pub(crate) use menu::menu_row_width;
 pub(crate) use menu::preview_blend;
 pub use menu::{blend_menu, context_popup, menu_check, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
 pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
+use page::page_section;
 use paints::{appearance, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
 
@@ -116,12 +118,15 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     app.ui.right_panel_rect = Some(edge);
     ui.painter().line_segment([edge.left_top(), edge.left_bottom()], Stroke::new(1.0, t.border));
     let w = ui.available_width();
+    // The kit's header is one stack: 48 pt of people, play and Share, then the 33 pt tabs row,
+    // with no gaps between them or before the first section.
+    ui.spacing_mut().item_spacing.y = 0.0;
     // Top bar: people (you and the others in a live session), present, share.
     let (top, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
     // As wide as its label needs (longer in some languages).
-    let label = ui.painter().layout_no_wrap(tr("Share").to_string(), semibold(11.5), Color32::WHITE);
-    let sw = (label.size().x + 24.0).max(56.0);
-    let share = Rect::from_min_size(pos2(top.max.x - 14.0 - sw, top.center().y - 16.0), vec2(sw, 32.0));
+    let label = ui.painter().layout_no_wrap(tr("Share").to_string(), semibold(11.0), Color32::WHITE);
+    let sw = (label.size().x + 24.0).max(54.0);
+    let share = Rect::from_min_size(pos2(top.max.x - 8.0 - sw, top.center().y - 16.0), vec2(sw, 32.0));
     let sresp = ui.interact(share, ui.scope_id().with("share"), Sense::click()).tip(tr("Share: live session, export"));
     // The UI3 toolbar's colours: the kit's blue, its hand-off green in Dev Mode, white text.
     let fill = crate::toolbar::mode_fill(app.ui.right_tab);
@@ -129,19 +134,19 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     ui.painter().galley(share.center() - label.size() / 2.0, label, Color32::WHITE);
     crate::live::share_popover(app, &sresp);
     // Play presents; its chevron opens the play menu (present, or preview in a pane).
-    let play = Rect::from_min_size(pos2(share.min.x - 50.0, top.center().y - 14.0), vec2(42.0, 28.0));
+    let play = Rect::from_min_size(pos2(share.min.x - 4.0 - 49.0, top.center().y - 16.0), vec2(49.0, 32.0));
     let (tri_r, chev_r) =
-        (Rect::from_min_max(play.min, pos2(play.max.x - 16.0, play.max.y)), Rect::from_min_max(pos2(play.max.x - 16.0, play.min.y), play.max));
+        (Rect::from_min_max(play.min, pos2(play.min.x + 32.0, play.max.y)), Rect::from_min_max(pos2(play.min.x + 33.0, play.min.y), play.max));
     let present_keys = crate::toolbar::pretty_shortcut(crate::shortcuts::shortcut("proto.present").unwrap_or(""));
     let presp = ui.interact(tri_r, ui.scope_id().with("play"), Sense::click()).tip(format!("{}  {present_keys}", tr("Present")));
     let mresp = ui.interact(chev_r, ui.scope_id().with("play_menu"), Sense::click()).tip(tr("Present or preview"));
     if presp.hovered() || mresp.hovered() {
         ui.painter().rect_filled(play, CornerRadius::same(5), t.hover);
     }
-    let tri = Rect::from_center_size(play.center() - vec2(7.0, 0.0), vec2(16.0, 16.0));
+    let tri = Rect::from_center_size(tri_r.center(), vec2(16.0, 16.0));
     let c = tri.center();
     ui.painter().add(egui::Shape::closed_line(vec![c + vec2(-5.0, -7.0), c + vec2(7.0, 0.0), c + vec2(-5.0, 7.0)], Stroke::new(1.4, t.icon)));
-    icons::paint(ui.painter(), Rect::from_center_size(play.center() + vec2(12.0, 0.0), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
+    icons::paint(ui.painter(), Rect::from_center_size(chev_r.center(), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
     crate::live::people_bar(app, ui, Rect::from_min_max(pos2(top.min.x + 12.0, top.min.y), pos2(play.min.x - 6.0, top.max.y)));
     if presp.clicked() {
         app.run("proto.present", json!({}));
@@ -158,8 +163,8 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
         }
     });
     // Tabs row.
-    let (tabs, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    ui.painter().line_segment([tabs.left_top(), tabs.right_top()], Stroke::new(1.0, t.border));
+    let (tabs, _) = ui.allocate_exact_size(vec2(w, 33.0), Sense::hover());
+    let tab_y = tabs.min.y + 12.0;
     let mut x = tabs.min.x + 8.0;
     // Dev Mode has Inspect and Plugins; the other modes Design and Prototype.
     let dev = app.ui.right_tab == RightTab::Inspect;
@@ -173,7 +178,7 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     };
     for (i, (label, active, tab)) in tab_list.into_iter().enumerate() {
         let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), t.text);
-        let r = Rect::from_min_size(pos2(x, tabs.center().y - 12.0), vec2(galley.size().x + 16.0, 24.0));
+        let r = Rect::from_min_size(pos2(x, tab_y - 12.0), vec2(galley.size().x + 15.0, 24.0));
         let resp = ui.interact(r, ui.scope_id().with(("rtab", label)), Sense::click());
         a11y::tab(&resp, label, active);
         if active {
@@ -191,11 +196,15 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
                 None => app.ui.dev.plugins_tab = i == 1,
             }
         }
-        x = r.max.x + 2.0;
+        x = r.max.x + 4.0;
     }
     // Zoom menu.
     let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
-    let zr = Rect::from_min_size(pos2(tabs.max.x - 64.0, tabs.center().y - 12.0), vec2(56.0, 24.0));
+    // The button is as wide as its value: 12 pt, the value, the chevron's 16 pt box and 4 pt.
+    let zoom_text = format!("{}%", (zoom * 100.0).round());
+    let zoom_w = ui.painter().layout_no_wrap(zoom_text.clone(), regular(11.0), t.text).size().x;
+    let zw = 12.0 + zoom_w + 16.0 + 4.0;
+    let zr = Rect::from_min_size(pos2(tabs.max.x - 8.0 - zw, tab_y - 12.0), vec2(zw, 24.0));
     let zresp = ui.interact(zr, ui.scope_id().with("zoommenu"), Sense::click());
     // The value is only spelled out while a screen reader reads the tree.
     let value = if a11y::active(&zresp.ctx) { format!("{}%", (zoom * 100.0).round()) } else { String::new() };
@@ -203,8 +212,8 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     if zresp.hovered() {
         ui.painter().rect_filled(zr, CornerRadius::same(5), t.hover);
     }
-    ui.painter().text(pos2(zr.min.x + 6.0, zr.center().y), Align2::LEFT_CENTER, format!("{}%", (zoom * 100.0).round()), regular(11.0), t.text);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(zr.max.x - 9.0, zr.center().y), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
+    ui.painter().text(pos2(zr.min.x + 12.0, zr.center().y), Align2::LEFT_CENTER, &zoom_text, regular(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(zr.max.x - 12.0, zr.center().y), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
     menu_popup(&zresp).width(200.0).show(|ui| {
         for (label, cmd) in [
             (tr("Zoom in"), "view.zoomIn"),
@@ -323,65 +332,6 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
         widgets::separator(ui);
     }
     crate::export_panel::section(app, ui, &shown, &sel);
-}
-
-/// Draw the page section: background and colour profile, local variables/styles, and the
-/// page export section.
-fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
-    let t = Tokens::get(ui.ctx());
-    let Ok(page) = app.session.page() else { return };
-    let bg = match doc.node(page).map(|n| &n.kind) {
-        Some(NodeKind::Page { background, .. }) => *background,
-        _ => figcraft_color::Color::DEFAULT_PAGE,
-    };
-    widgets::section_header(ui, tr("Page"), &[], false);
-    let mut new_hex = None;
-    row(ui, 32.0, |ui| {
-        let p = Paint::solid(bg);
-        let sw = widgets::swatch(ui, &p, 16.0);
-        app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
-        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "") {
-            new_hex = Some(h);
-        }
-        widgets::label(ui, "100 %", t.text);
-    });
-    if let Some(h) = new_hex
-        && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-    {
-        app.run("page.setBackground", json!({"color": c.to_css_hex()}));
-    }
-    widgets::separator(ui);
-    widgets::section_header(ui, tr("Color profile"), &[], false);
-    row(ui, 32.0, |ui| {
-        let resp = widgets::dropdown(ui, doc.color_profile.label(), 140.0, None);
-        menu_popup(&resp).show(|ui| {
-            for p in figcraft_color::ColorProfile::ALL {
-                if menu_item(ui, p.label(), "") {
-                    if p != doc.color_profile {
-                        app.ui.color_profile = Some(p);
-                    }
-                    ui.close();
-                }
-            }
-        });
-    });
-    widgets::separator(ui);
-    // Local variables & styles.
-    let vars = doc.variables.variables.iter().filter(|v| !figcraft_engine::library::is_remote_variable(doc, &v.id)).count();
-    widgets::section_header(ui, tr("Local variables"), &[], vars == 0);
-    row(ui, 32.0, |ui| {
-        let r = widgets::dropdown(ui, &trf("Open variables ({count})", &[("count", &vars)]), 200.0, Some(Icon::Styles));
-        if r.clicked() {
-            app.ui.preferences = false;
-            app.ui.palette = None;
-            app.ui.variables.get_or_insert_with(Default::default);
-        }
-    });
-    widgets::separator(ui);
-    widgets::section_header(ui, tr("Local styles"), &[], figcraft_engine::library::local_styles(doc).next().is_none());
-    crate::style_picker::local_styles(app, ui, doc);
-    widgets::separator(ui);
-    crate::export_panel::page_section(app, ui, doc, page);
 }
 
 /// Draw the selection header: type name (or Mixed), frame/group conversion, orientation

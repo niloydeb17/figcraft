@@ -343,7 +343,8 @@ fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f3
     } else if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon_secondary);
+    // The kit's 24 pt glyph at two thirds of its size: the tab strip's marks are small.
+    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(11.5, 11.5)), Icon::Home, t.icon_secondary);
     if hresp.clicked() {
         pause_present(app);
         app.ui.home = true;
@@ -486,7 +487,7 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     }
     icons::paint(
         &painter,
-        Rect::from_center_size(pos2(paint_r.min.x + 18.0, paint_r.center().y), vec2(14.0, 14.0)),
+        Rect::from_center_size(pos2(paint_r.min.x + 18.0, paint_r.center().y), vec2(11.0, 11.0)),
         icons::file_mark(kind),
         if active { crate::toolbar::DESIGN_BLUE } else { t.icon_secondary }.linear_multiply(progress),
     );

@@ -20,7 +20,7 @@ use crate::colorpicker::PickerTarget;
 use crate::i18n::{tr, trf};
 use crate::icons::{self, Icon};
 use crate::popover::{Hold, Open, Popover, Surface};
-use crate::theme::{Tokens, regular, semibold};
+use crate::theme::{Tokens, regular};
 use crate::widgets;
 
 /// The slot's margin inside the shared popover, and the content width left of it.
@@ -1224,20 +1224,44 @@ pub fn local_styles(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     let renaming: Option<String> = ui.data(|d| d.get_temp(folder_rename_id()));
     let mut run: Option<(&'static str, Value)> = None;
     let mut edit: Option<(StyleSlot, String)> = None;
+    let mut first_group = true;
     for slot in [StyleSlot::Text, StyleSlot::Fill, StyleSlot::Effect, StyleSlot::Grid] {
         let groups = by_folder(library::local_styles(doc).filter(|s| slot.holds(&s.kind)));
         if groups.is_empty() {
             continue;
         }
-        crate::right::row(ui, 24.0, |ui| widgets::label(ui, slot.title(), t.text_secondary));
+        // The kit's group heading: 8 pt above and below its 16 pt line, a 16 pt gap between groups.
+        if !first_group {
+            ui.add_space(16.0);
+        }
+        first_group = false;
+        let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+        ui.painter().text(pos2(head.min.x + widgets::PAD, head.center().y), Align2::LEFT_CENTER, slot.title(), regular(11.0), t.text_secondary);
         let mut drag = crate::list_drag::ListDrag::in_order(ui, ("local_styles", slot.key()));
         let mut shown: Vec<&Style> = Vec::new();
         for (f, list) in &groups {
-            let indent = if f.is_empty() { 0.0 } else { 12.0 };
+            let indent = if f.is_empty() { 0.0 } else { 25.0 };
+            let open_id = Id::unique(("style_folder_open", slot.key(), *f));
+            let open = f.is_empty() || ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
             if !f.is_empty() {
                 let w = ui.available_width();
-                let (r, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
-                let text_r = Rect::from_min_max(pos2(r.min.x + widgets::PAD, r.min.y + 2.0), pos2(r.max.x - widgets::PAD, r.max.y - 2.0));
+                // The kit's folder row: 26 pt tall at an 8 pt margin, a 4 pt gap above it.
+                let (cell, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                let r = Rect::from_min_max(pos2(cell.min.x + 8.0, cell.min.y + 4.0), pos2(cell.max.x - 8.0, cell.max.y));
+                if resp.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+                }
+                let caret = if open { Icon::Chevron } else { Icon::FolderCaret };
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_min_size(pos2(r.min.x + 9.0, r.center().y - 8.0), vec2(16.0, 16.0)),
+                    caret,
+                    t.icon_secondary.gamma_multiply(0.6),
+                );
+                let text_r = Rect::from_min_max(pos2(r.min.x + 33.0, r.min.y + 2.0), pos2(r.max.x - 8.0, r.max.y - 2.0));
+                if resp.clicked() && renaming.as_deref() != Some(*f) {
+                    ui.data_mut(|d| d.insert_temp(open_id, !open));
+                }
                 if renaming.as_deref() == Some(*f) {
                     // Focused as it is first drawn: a focus asked for before its field is drawn
                     // isn't in the screen reader tree (UI Automation aborts the app, #224).
@@ -1251,7 +1275,7 @@ pub fn local_styles(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
                     }
                 } else {
                     let resp = resp.tip(*f);
-                    crate::bidi::paint_name(ui.painter(), text_r.left_center(), f, semibold(11.0), t.text, text_r.width());
+                    crate::bidi::paint_name(ui.painter(), text_r.left_center(), f, regular(11.0), t.text, text_r.width());
                     crate::right::context_popup(&resp).show(|ui| {
                         if crate::right::menu_item(ui, tr("Rename folder"), "") {
                             ui.data_mut(|d| d.insert_temp(folder_rename_id(), f.to_string()));
@@ -1260,6 +1284,9 @@ pub fn local_styles(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
                         }
                     });
                 }
+            }
+            if !open {
+                continue;
             }
             for s in list {
                 let index = shown.len();

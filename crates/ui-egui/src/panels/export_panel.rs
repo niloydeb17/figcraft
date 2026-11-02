@@ -446,14 +446,11 @@ pub(crate) fn suggested_name(doc: &Document, ids: &[NodeId], setting: &ExportSet
     format!("{name}{}.{}", setting.file_suffix(), setting.format.ext())
 }
 
-/// The page's Export section: the whole page as one PNG.
-pub fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId) {
-    widgets::section_header(ui, tr("Export"), &[], false);
-    if wide_button(ui, tr("Export page as PNG")) {
-        let all: Vec<NodeId> = doc.node(page).map(|p| p.children.clone()).unwrap_or_default();
-        let setting = ExportSetting::default();
-        let page_name = doc.node(page).map_or(tr("Page"), |p| p.name.as_str());
-        let file = format!("{page_name}.{}", setting.format.ext());
-        save_one(app, &all, &setting, &file);
-    }
+/// Export the whole page as one PNG (the page panel's Export button).
+pub fn export_page_png(app: &mut FigApp, doc: &Document, page: NodeId) {
+    let all: Vec<NodeId> = doc.node(page).map(|p| p.children.clone()).unwrap_or_default();
+    let setting = ExportSetting::default();
+    let page_name = doc.node(page).map_or(tr("Page"), |p| p.name.as_str());
+    let file = format!("{page_name}.{}", setting.format.ext());
+    save_one(app, &all, &setting, &file);
 }

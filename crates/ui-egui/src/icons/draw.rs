@@ -1089,6 +1089,18 @@ fn draw(p: &P, icon: Icon) {
         Clipboard => draw(p, Export),
         RailVariables => draw(p, Styles),
         RailAssets => draw(p, Assets),
+        PageModes => draw(p, Styles),
+        McpSettings => draw(p, Adjust),
+        FolderCaret => draw(p, ChevronRight),
+        LayoutFree => draw(p, AutoLayout),
+        LockAspect => draw(p, LinkOff),
+        GapV => draw(p, DistributeV),
+        LayoutSettings => draw(p, Adjust),
+        FlowV => draw(p, LayoutV),
+        FlowH => draw(p, LayoutH),
+        FlowGrid => draw(p, LayoutGrid),
+        FlowWrap => draw(p, LayoutWrap),
+        SelectColor => draw(p, Move),
         Logo => {
             // FigCraft's own mark: the curled tail of the chameleon on the app icon. One bold
             // stroke: a shaft along the bottom, then three half turns, each tighter than the last.
