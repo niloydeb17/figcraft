@@ -175,8 +175,43 @@ impl P<'_> {
     }
 }
 
+/// A Figma UI3 glyph (flattened, triangulated outlines on a 16 or 24 unit grid) centred in `rect`,
+/// one grid unit per 1/16 of the box.
+fn paint_glyph(painter: &Painter, rect: Rect, g: &super::figma::Glyph, color: Color32) {
+    let ppp = painter.ctx().pixels_per_point();
+    let px = 1.0 / ppp;
+    let s = rect.width().min(rect.height()) / 16.0;
+    let half = g.canvas * 0.5 * s;
+    let o = rect.center() - vec2(half, half);
+    let o = pos2((o.x * ppp).round() * px, (o.y * ppp).round() * px);
+    let at = |i: usize| {
+        let x = g.verts.get(i * 2).copied().unwrap_or(0.0);
+        let y = g.verts.get(i * 2 + 1).copied().unwrap_or(0.0);
+        pos2(o.x + x * s, o.y + y * s)
+    };
+    let mut mesh = Mesh::default();
+    for i in 0..g.verts.len() / 2 {
+        mesh.colored_vertex(at(i), color);
+    }
+    mesh.indices = g.tris.iter().map(|&t| u32::from(t)).collect();
+    painter.add(Shape::mesh(mesh));
+    // A hairline round each ring softens the mesh edges, as for the other filled marks.
+    let stroke = Stroke::new(px * 0.5, color);
+    let mut start = 0usize;
+    for &n in g.rings {
+        let n = usize::from(n);
+        let pts: Vec<Pos2> = (start..start + n).map(&at).collect();
+        painter.add(Shape::closed_line(pts, stroke));
+        start += n;
+    }
+}
+
 /// Paint `icon` centred in `rect` (a 16-unit glyph scaled to fit) in `color`.
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
+    if let Some(g) = super::figma::glyph(icon) {
+        paint_glyph(painter, rect, g, color);
+        return;
+    }
     let ppp = painter.ctx().pixels_per_point();
     let px = 1.0 / ppp;
     // Physical pixels per grid unit: whole steps from 16 px up (quarter steps on fractional
