@@ -47,6 +47,55 @@ pub enum Command {
         command: ConnectCommand,
     },
     Perf(PerfArgs),
+    /// Sign in with ChatGPT and make images with your own plan (a preview)
+    Ai {
+        #[command(subcommand)]
+        command: AiCommand,
+    },
+}
+
+/// What `figcraft-cli ai` can do.
+#[derive(Subcommand)]
+pub enum AiCommand {
+    /// Sign in with ChatGPT in your browser
+    Login(AiLoginArgs),
+    /// Whether this machine is signed in, and for how long
+    Status,
+    /// Forget the sign-in kept on this machine
+    Logout,
+    /// List the models your ChatGPT plan can use
+    Models,
+    /// Make an image with your ChatGPT plan
+    Image(AiImageArgs),
+}
+
+#[derive(Args)]
+pub struct AiLoginArgs {
+    /// Seconds to wait for the browser to come back
+    #[arg(long, default_value_t = 300, value_name = "SECONDS")]
+    pub timeout: u64,
+    /// Print the sign-in address instead of opening the browser
+    #[arg(long)]
+    pub no_browser: bool,
+}
+
+#[derive(Args)]
+pub struct AiImageArgs {
+    /// What to draw
+    #[arg(value_name = "PROMPT")]
+    pub prompt: String,
+    /// Where to write the PNG
+    #[arg(long, value_name = "FILE")]
+    pub out: String,
+    /// The model that drives the request (default: the first of your plan's models that suits it)
+    #[arg(long)]
+    pub model: Option<String>,
+    /// 1024x1024, 1536x1024, 1024x1536 or auto
+    #[arg(long)]
+    pub size: Option<String>,
+    /// transparent, opaque or auto
+    #[arg(long)]
+    pub background: Option<String>,
 }
 
 /// The folders a file subcommand may touch. Without either flag it reads and writes as the user

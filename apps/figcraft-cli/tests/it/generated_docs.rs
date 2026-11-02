@@ -98,6 +98,12 @@ fn man_pages_cover_every_subcommand_without_synthetic_help_pages() -> std::io::R
     assert_eq!(
         pages,
         [
+            "figcraft-cli-ai-image.1",
+            "figcraft-cli-ai-login.1",
+            "figcraft-cli-ai-logout.1",
+            "figcraft-cli-ai-models.1",
+            "figcraft-cli-ai-status.1",
+            "figcraft-cli-ai.1",
             "figcraft-cli-commands.1",
             "figcraft-cli-connect-publish.1",
             "figcraft-cli-connect.1",
@@ -125,6 +131,8 @@ fn man_pages_cover_every_subcommand_without_synthetic_help_pages() -> std::io::R
         ("figcraft-cli-export.1", "--automation-read-root"),
         ("figcraft-cli-plugin-publish.1", "--server"),
         ("figcraft-cli-connect-publish.1", "--dry-run"),
+        ("figcraft-cli-ai-image.1", "--out"),
+        ("figcraft-cli-ai-login.1", "--no-browser"),
     ] {
         let text = fs::read_to_string(dir.join(page))?.replace("\\-", "-");
         assert!(text.contains(option), "{page} does not contain {option}");
@@ -145,7 +153,7 @@ fn generation_creates_the_output_directory_and_can_run_again() -> std::io::Resul
     fs::write(&page, "old page")?;
     generator::generate(&output)?;
     assert_eq!(fs::read(page)?, first);
-    assert_eq!(fs::read_dir(output)?.count(), 18);
+    assert_eq!(fs::read_dir(output)?.count(), 24);
     Ok(())
 }
 

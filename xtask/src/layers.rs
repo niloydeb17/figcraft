@@ -22,6 +22,8 @@ const TABLE: &[(&str, u8)] = &[
     ("engine", 5),
     ("ui-egui", 6),
     ("mcp", 6),
+    // AI providers (HTTPS and a loopback listener): beside the UI, desktop and CLI only.
+    ("ai", 6),
     // Live sessions over the network (WebSockets): above the engine, beside the UI.
     ("collab-net", 6),
 ];
