@@ -12,7 +12,7 @@ WORKDIR /w
 RUN git clone --depth 1 https://github.com/storytold/craft-fonts /w/craft-fonts
 COPY . /w/figcraft
 WORKDIR /w/figcraft/apps/figcraft-web
-RUN trunk build --release
+RUN for i in 1 2 3 4 5; do trunk build --release && exit 0; echo "trunk build failed (attempt $i), retrying"; sleep 15; done; exit 1
 
 FROM nginx:alpine
 ARG PUBLIC_WSS=wss://figcraft.kubelet.cloud/
