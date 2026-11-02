@@ -118,6 +118,24 @@ fn restore_unsaved(session: &mut Session) -> usize {
 }
 
 /// Say on the page that it stopped (the canvas stays as it was).
+/// The browser tab's title: the open file's name (and a dot while it has unsaved changes), as Figma's
+/// tab names its file; plain FigCraft on the Home screen. The page has no tab strip of its own.
+fn set_page_title(fig: &FigApp) {
+    thread_local! {
+        static SHOWN: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    let title = if fig.has_files() && !fig.ui.home { fig.title() } else { "FigCraft".to_string() };
+    SHOWN.with(|shown| {
+        let Ok(mut shown) = shown.try_borrow_mut() else { return };
+        if *shown != title {
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                document.set_title(&title);
+            }
+            *shown = title;
+        }
+    });
+}
+
 fn show_stopped(text: &str) {
     let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
     let (Ok(el), Some(body)) = (document.create_element("div"), document.body()) else { return };
@@ -170,6 +188,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
+        set_page_title(&self.fig);
         crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,
         // auto-sizing text measured in a fallback fits it.

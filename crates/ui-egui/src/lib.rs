@@ -273,6 +273,8 @@ mod vote_history_ui_tests;
 #[cfg(test)]
 mod vote_voters_tests;
 #[cfg(test)]
+mod web_chrome_tests;
+#[cfg(test)]
 mod web_clipboard_tests;
 #[cfg(test)]
 mod web_save_tests;
@@ -420,6 +422,9 @@ pub struct UiState {
     /// The frame or section whose name label on the canvas is being renamed (a double-click on it).
     pub rename_label: Option<layers::Rename>,
     pub main_menu: bool,
+    /// No tab strip: the page is one file, as in the browser (the main menu has Back to files). On
+    /// the web; the desktop app keeps its tabs.
+    pub no_tab_strip: bool,
     pub palette: Option<String>,
     /// The Actions palette's tab.
     pub palette_tab: menus::PaletteTab,
@@ -626,6 +631,7 @@ impl Default for UiState {
             rename_page: None,
             rename_label: None,
             main_menu: false,
+            no_tab_strip: cfg!(target_arch = "wasm32"),
             palette: None,
             palette_tab: menus::PaletteTab::All,
             palette_hi: 0,

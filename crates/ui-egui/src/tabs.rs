@@ -346,8 +346,7 @@ fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f3
     // The kit's 24 pt glyph at two thirds of its size: the tab strip's marks are small.
     icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(11.5, 11.5)), Icon::Home, t.icon_secondary);
     if hresp.clicked() {
-        pause_present(app);
-        app.ui.home = true;
+        back_to_files(app);
     }
     w
 }
@@ -585,6 +584,18 @@ fn owner(app: &FigApp, uid: u64) -> Option<usize> {
 pub fn present_owner_active(app: &FigApp) -> bool {
     let Some(tab) = app.ui.present_active.and_then(|id| app.ui.presents.iter().find(|t| t.id == id)) else { return true };
     owner(app, tab.doc_uid).is_some_and(|i| i == app.session.active)
+}
+
+/// The tab strip's height now: nothing where the page has no strip ([`crate::UiState::no_tab_strip`]).
+pub fn bar_height(app: &FigApp) -> f32 {
+    if app.ui.no_tab_strip { 0.0 } else { HEIGHT }
+}
+
+/// Leave the file for Home (the Home tab's job where there are tabs; Back to files in the main menu
+/// where there are none).
+pub fn back_to_files(app: &mut FigApp) {
+    pause_present(app);
+    app.ui.home = true;
 }
 
 /// Puts the presenter on screen back into its tab, where it keeps its state.
