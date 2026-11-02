@@ -118,12 +118,14 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     // Top bar: people (you and the others in a live session), present, share.
     let (top, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
     // As wide as its label needs (longer in some languages).
-    let label = ui.painter().layout_no_wrap(tr("Share").to_string(), semibold(11.5), t.accent_on);
+    let label = ui.painter().layout_no_wrap(tr("Share").to_string(), semibold(11.5), Color32::WHITE);
     let sw = (label.size().x + 24.0).max(56.0);
     let share = Rect::from_min_size(pos2(top.max.x - 14.0 - sw, top.center().y - 16.0), vec2(sw, 32.0));
     let sresp = ui.interact(share, ui.scope_id().with("share"), Sense::click()).tip(tr("Share: live session, export"));
-    ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { t.accent_hover } else { t.accent });
-    ui.painter().galley(share.center() - label.size() / 2.0, label, t.accent_on);
+    // The UI3 toolbar's colours: the kit's blue, its hand-off green in Dev Mode, white text.
+    let fill = crate::toolbar::mode_fill(app.ui.right_tab);
+    ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { fill.gamma_multiply(0.9) } else { fill });
+    ui.painter().galley(share.center() - label.size() / 2.0, label, Color32::WHITE);
     crate::live::share_popover(app, &sresp);
     // Play presents; its chevron opens the play menu (present, or preview in a pane).
     let play = Rect::from_min_size(pos2(share.min.x - 50.0, top.center().y - 14.0), vec2(42.0, 28.0));

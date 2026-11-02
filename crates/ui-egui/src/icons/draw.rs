@@ -1079,6 +1079,10 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(5.5, 5.5), (3.0, 8.0), (5.5, 10.5)], false);
             p.poly(&[(10.5, 5.5), (13.0, 8.0), (10.5, 10.5)], false);
         }
+        // The mode switcher's marks have their own glyphs; these are the originals they stand in for.
+        ModeDraw => draw(p, Pencil),
+        ModeDesign => draw(p, Frame),
+        ModePrototype => draw(p, Prototype),
         Logo => {
             // FigCraft's own mark: the curled tail of the chameleon on the app icon. One bold
             // stroke: a shaft along the bottom, then three half turns, each tighter than the last.

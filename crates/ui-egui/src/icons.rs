@@ -176,6 +176,10 @@ icons! {
     Swap,
     Link,
     Prototype,
+    /// The mode switcher's Draw, Design and Prototype marks.
+    ModeDraw,
+    ModeDesign,
+    ModePrototype,
     /// The prototype preview pane: a small window playing a frame.
     Preview,
     Section2,

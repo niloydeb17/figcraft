@@ -13,16 +13,39 @@ use crate::theme::{Tokens, regular};
 
 /// Every mark in the toolbar row is painted in a box this size, so they share one optical size
 /// and one stroke width (#737, #738).
-const GLYPH: f32 = 18.0;
+const GLYPH: f32 = 16.0;
 /// The flyout carets: smaller than the marks, but on a box whose stroke rounds to the same width
 /// as theirs at 1×, 1.5× and 2× (a 10-point box drew them one physical pixel thinner).
-const CARET: f32 = 14.0;
+const CARET: f32 = 16.0;
 /// A flyout caret's button: wide enough to hit, a little clear of its tool's (#988).
 const FLYOUT_W: f32 = 16.0;
-const FLYOUT_GAP: f32 = 2.0;
+const FLYOUT_GAP: f32 = 1.0;
 
 // The pill's grid: every state of it (the tools, the vector and shape builder ones) is laid out on
 // one 32 pt cell, PAD in from its ends and GAP between its top-level items, the divider included.
+/// The UI3 toolbar's colours: the chosen tool's fill (the kit's blue; its hand-off green in Dev
+/// Mode), white on it, and the chosen mode's mark.
+const DESIGN_BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
+const HANDOFF_GREEN: Color32 = Color32::from_rgb(0x14, 0xAE, 0x5C);
+const MODE_BLUE: Color32 = Color32::from_rgb(0x00, 0x7B, 0xE5);
+
+/// The fill of the toolbar's chosen tool and of the Share button for the panel's `tab`.
+pub(crate) fn mode_fill(tab: crate::RightTab) -> Color32 {
+    if tab == crate::RightTab::Inspect { HANDOFF_GREEN } else { DESIGN_BLUE }
+}
+
+fn active_id() -> egui::Id {
+    egui::Id::unique("toolbar_active_fill")
+}
+
+/// The fill of the chosen tool's button: set by [`show`] for the file's mode.
+fn active_fill(ui: &Ui) -> Color32 {
+    ui.data(|d| d.get_temp::<Color32>(active_id())).unwrap_or(DESIGN_BLUE)
+}
+
+/// The pill's height and corner radius.
+const PILL_H: f32 = 48.0;
+const PILL_RADIUS: u8 = 13;
 /// A toolbar button's size: the cell everything in the pill is placed on.
 const TOOL_CELL: f32 = 32.0;
 /// The pill's left and right padding.
@@ -32,7 +55,13 @@ const GAP: f32 = 8.0;
 /// The divider's width.
 const DIVIDER: f32 = 1.0;
 /// The mode switcher's marks: smaller than the tools' (13–14 pt).
-const MODE_GLYPH: f32 = 14.0;
+const MODE_GLYPH: f32 = 16.0;
+/// The mode switcher's segments: a little smaller than the tool cells, `MODE_INSET` in from the
+/// field's edge and `MODE_INSET` apart.
+const MODE_CELL: f32 = 28.0;
+const MODE_INSET: f32 = 2.0;
+/// The mode switcher's width: four segments, three gaps and an inset at each end.
+const MODE_W: f32 = 4.0 * MODE_CELL + 3.0 * MODE_INSET + 2.0 * MODE_INSET;
 
 /// `GLYPH`'s box centred in `r`.
 fn glyph_rect(r: Rect) -> Rect {
@@ -116,6 +145,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let canvas = app.canvas.rect;
     app.ui.actions_rect = None;
+    ui.data_mut(|d| d.insert_temp(active_id(), mode_fill(app.ui.right_tab)));
     // A file you can't edit now (view only, or on its way to a server): moving around only.
     if let Some(why) = app.session.active_read_only() {
         view_only_toolbar(app, ui, why);
@@ -148,7 +178,7 @@ fn main_width(groups: &[Group], board: bool) -> f32 {
     let tools: f32 = groups.iter().map(|g| TOOL_CELL + if g.has_flyout() { FLYOUT_GAP + FLYOUT_W } else { 0.0 }).sum();
     // The end, and the gaps that aren't a group's own: after Actions and after the divider (and
     // between a board's two buttons, which the end counts as one item).
-    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (4.0 * TOOL_CELL, 2.0) };
+    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (MODE_W, 2.0) };
     PAD * 2.0 + tools + (groups.len() as f32 + gaps) * GAP + TOOL_CELL + DIVIDER + end
 }
 
@@ -250,7 +280,7 @@ fn flyout_caret(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, t: &To
     if cresp.hovered() {
         ui.painter().rect_filled(cr, CornerRadius::same(4), t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(cr.center(), vec2(CARET, CARET)), Icon::Chevron, t.icon_secondary);
+    icons::paint(ui.painter(), Rect::from_center_size(cr.center(), vec2(CARET, CARET)), Icon::Chevron, t.icon);
     if cresp.clicked() {
         app.ui.tool_flyout = if open { None } else { Some(g.key) };
     }
@@ -264,11 +294,11 @@ fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) ->
     // The Actions button reads on while its panel is open; clicking it again closes it.
     let open = app.ui.palette.is_some();
     if open {
-        ui.painter().rect_filled(r, CornerRadius::same(5), t.accent);
+        ui.painter().rect_filled(r, CornerRadius::same(5), active_fill(ui));
     } else if resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), glyph_rect(r), Icon::Actions, if open { t.accent_on } else { t.icon });
+    icons::paint(ui.painter(), glyph_rect(r), Icon::Actions, if open { Color32::WHITE } else { t.icon });
     if resp.clicked() {
         crate::menus::toggle_palette(&mut app.ui);
     }
@@ -277,30 +307,40 @@ fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) ->
 
 /// The mode switcher from `x`: Draw · Design · Prototype · Inspect (code).
 fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
-    let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Prototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
+    let modes = [(Icon::ModeDraw, tr("Draw")), (Icon::ModeDesign, tr("Design")), (Icon::ModePrototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
     let active = match app.ui.right_tab {
         crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
         crate::RightTab::Design => 1,
         crate::RightTab::Prototype => 2,
         crate::RightTab::Inspect => 3,
     };
-    let seg = Rect::from_min_size(pos2(x, cy - TOOL_CELL / 2.0), vec2(4.0 * TOOL_CELL, TOOL_CELL));
+    let seg = Rect::from_min_size(pos2(x, cy - TOOL_CELL / 2.0), vec2(MODE_W, TOOL_CELL));
     ui.painter().rect_filled(seg, CornerRadius::same(5), t.field);
     for (i, (icon, tip)) in modes.iter().enumerate() {
-        let r = Rect::from_min_size(pos2(seg.min.x + i as f32 * TOOL_CELL, seg.min.y), vec2(TOOL_CELL, TOOL_CELL));
+        let left = seg.min.x + MODE_INSET + i as f32 * (MODE_CELL + MODE_INSET);
+        let r = Rect::from_min_size(pos2(left, seg.min.y + MODE_INSET), vec2(MODE_CELL, MODE_CELL));
         let resp = ui.interact(r, ui.scope_id().with(("mode", i)), Sense::click()).on_hover_text(*tip);
         a11y::toggle(&resp, tip, i == active);
         if i == active {
-            // The current mode lifts with a plain inset, no outline.
-            ui.painter().rect_filled(r.shrink(2.0), CornerRadius::same(3), t.panel);
+            // The current mode lifts off the field: a white cell with a soft drop.
+            let radius = CornerRadius::same(3);
+            ui.painter().add(egui::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(38) }.as_shape(r, radius));
+            ui.painter().rect_filled(r, radius, t.panel);
+            ui.painter().rect_stroke(r, radius, Stroke::new(0.5, Color32::from_black_alpha(30)), StrokeKind::Outside);
         } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+            ui.painter().rect_filled(r, CornerRadius::same(3), t.hover);
         }
         icons::paint(
             ui.painter(),
             Rect::from_center_size(r.center(), vec2(MODE_GLYPH, MODE_GLYPH)),
             *icon,
-            if i == active { t.accent_text } else { t.icon_secondary },
+            if i != active {
+                t.icon_secondary
+            } else if i == 3 {
+                HANDOFF_GREEN
+            } else {
+                MODE_BLUE
+            },
         );
         if resp.clicked() {
             pick_mode(app, i);
@@ -483,7 +523,7 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
 /// (Never wider than the canvas less a margin: on a phone the main toolbar scrolls inside it.)
 pub(crate) fn pill_rect(canvas: Rect, width: f32) -> Rect {
     let width = width.min((canvas.width() - 16.0).max(0.0));
-    Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0))
+    Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - PILL_H / 2.0), vec2(width, PILL_H))
 }
 
 /// The floating pill (shadow, panel, border) `width` wide at the bottom centre of the canvas: the
@@ -497,11 +537,13 @@ fn pill(ui: &Ui, nav: &mut Nav, canvas: Rect, width: f32, t: &Tokens) -> Rect {
     a11y::area(nav, Region::Toolbar, rect);
     a11y::container_bounds(ui, rect);
     let painter = ui.painter();
-    for (i, a) in [(6.0, 10u8), (3.0, 16), (1.0, 24)] {
-        painter.rect_filled(rect.expand(i).translate(vec2(0.0, i * 0.5)), CornerRadius::same((13.0 + i) as u8), Color32::from_black_alpha(a));
+    let radius = CornerRadius::same(PILL_RADIUS);
+    // Two soft drops, then the pill, then a hairline round it: no border.
+    for (dy, blur) in [(3, 4), (1, 2)] {
+        painter.add(egui::Shadow { offset: [0, dy], blur, spread: 0, color: Color32::from_black_alpha(26) }.as_shape(rect, radius));
     }
-    painter.rect_filled(rect, CornerRadius::same(13), t.panel);
-    painter.rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    painter.rect_filled(rect, radius, t.panel);
+    painter.rect_stroke(rect, radius, Stroke::new(0.5, Color32::from_black_alpha(46)), StrokeKind::Outside);
     rect
 }
 
@@ -512,20 +554,20 @@ pub(crate) fn tool_cell(ui: &mut Ui, t: &Tokens, r: Rect, id: impl egui::AsIdSal
     });
     a11y::toggle(&resp, tip, active);
     let bg = if active {
-        t.accent
+        active_fill(ui)
     } else if resp.hovered() {
         t.hover
     } else {
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(r, CornerRadius::same(5), bg);
-    icons::paint(ui.painter(), glyph_rect(r), icon, if active { t.accent_on } else { t.icon });
+    icons::paint(ui.painter(), glyph_rect(r), icon, if active { Color32::WHITE } else { t.icon });
     resp
 }
 
-/// A vertical separator just after `x`: DIVIDER wide, as tall as the pill's content.
+/// A vertical separator just after `x`: DIVIDER wide, the pill's full height.
 fn divider(ui: &Ui, t: &Tokens, x: f32, cy: f32) {
-    let half = TOOL_CELL / 2.0;
+    let half = PILL_H / 2.0;
     ui.painter().line_segment([pos2(x + DIVIDER / 2.0, cy - half), pos2(x + DIVIDER / 2.0, cy + half)], Stroke::new(DIVIDER, t.border));
 }
 
@@ -536,8 +578,9 @@ fn done_button(ui: &mut Ui, t: &Tokens, x: f32, cy: f32, tip: &str) -> bool {
     divider(ui, t, x, cy);
     let done = Rect::from_min_size(pos2(x + DIVIDER + GAP, cy - 14.0), vec2(DONE_W, 28.0));
     let resp = ui.interact(done, ui.scope_id().with("tool_done"), Sense::click()).tip(tip);
-    ui.painter().rect_filled(done, CornerRadius::same(6), if resp.hovered() { t.accent_hover } else { t.accent });
-    ui.painter().text(done.center(), Align2::CENTER_CENTER, tr("Done"), crate::theme::semibold(11.5), t.accent_on);
+    let fill = active_fill(ui);
+    ui.painter().rect_filled(done, CornerRadius::same(6), if resp.hovered() { fill.gamma_multiply(0.9) } else { fill });
+    ui.painter().text(done.center(), Align2::CENTER_CENTER, tr("Done"), crate::theme::semibold(11.5), Color32::WHITE);
     resp.clicked()
 }
 
@@ -676,9 +719,19 @@ mod tests {
             }
             x += TOOL_CELL + GAP; // Actions
             x += DIVIDER + GAP; // the divider
-            let end = if board { 2.0 * TOOL_CELL + GAP } else { 4.0 * TOOL_CELL };
+            let end = if board { 2.0 * TOOL_CELL + GAP } else { MODE_W };
             assert!((x + end - (pill.max.x - PAD)).abs() < 0.01, "board {board}: {} vs {}", x + end, pill.max.x - PAD);
         }
+    }
+
+    /// The pill's cells follow the UI3 grid: 49 pt tool groups (button, 1 pt, caret) and a 122 pt
+    /// mode switcher of four 28 pt segments. That makes the pill 529 pt wide, less the 17 pt
+    /// caret of the Comment group, which has no other tools to offer.
+    #[test]
+    fn the_design_pill_is_on_the_ui3_grid() {
+        assert_eq!(MODE_W, 122.0);
+        assert_eq!(TOOL_CELL + FLYOUT_GAP + FLYOUT_W, 49.0);
+        assert_eq!(main_width(GROUPS, false), 529.0 - (FLYOUT_GAP + FLYOUT_W));
     }
 
     /// The stroke widths `icon` paints with in a `size` box at `ppp` pixels per point.

@@ -5,6 +5,10 @@ dist = "../../dist/web"
 public_url = "./"
 filehash = true
 
+[watch]
+# The app's own sources live in the workspace crates, outside this folder (the default watch).
+watch = ["../../crates"]
+
 [serve]
 addresses = ["127.0.0.1"]
 port = 8767
