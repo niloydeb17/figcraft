@@ -935,6 +935,18 @@ pub fn window_id() -> Id {
 /// gradient-stop edits live, positioned beside a plugin field when applicable.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let Some(target) = app.ui.picker.clone() else {
+        // Dev Mode's Copy colors: the sampled colour goes to the clipboard.
+        if app.ui.dev.copy_colors {
+            if let Some(c) = app.session.tool.picked.take() {
+                let hex = c.to_css_hex();
+                crate::services::egui_copy_text(ctx, &hex);
+                app.session.message = Some(format!("Copied {hex}"));
+                app.ui.dev.copy_colors = false;
+            } else if app.session.tool.tool != figcraft_engine::ToolId::Eyedropper {
+                app.ui.dev.copy_colors = false;
+            }
+            return;
+        }
         // A colour sampled for a picker that has closed has no paint to go to.
         app.session.tool.picked = None;
         if app.session.tool.pick_only {

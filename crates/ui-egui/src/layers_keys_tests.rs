@@ -148,7 +148,10 @@ fn delete_after_clicking_a_page_deletes_it_without_asking() {
     assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Page deleted"));
     u.app.run("edit.undo", json!({}));
     assert_eq!(pages(&u), 2);
-    // Backspace (the Mac's delete key) does the same.
+    // Backspace (the Mac's delete key) does the same. (The undo left the restored page selected:
+    // go back to the first, so that finding the second's row has to click it.)
+    u.app.session.execute("page.select", &json!({"id": first})).unwrap();
+    u.frame(vec![]);
     let row = page_row(&mut u, second, first);
     u.button(row, true);
     u.button(row, false);

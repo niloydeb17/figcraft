@@ -92,6 +92,12 @@ impl CategoryFilter {
 /// revision), the page or the choice change.
 #[derive(Default)]
 pub struct DevUi {
+    /// The toolbar's Measurement is on: the canvas measures as if Alt were held.
+    /// The Plugins tab of the Dev Mode panel is showing (not Inspect).
+    pub plugins_tab: bool,
+    pub measure_on: bool,
+    /// The toolbar's Copy colors is on: the next colour sampled from the canvas goes to the clipboard.
+    pub copy_colors: bool,
     pub filter: usize,
     pub categories: CategoryFilter,
     pub compare: Option<crate::dev_compare::CompareView>,
@@ -538,15 +544,24 @@ pub fn plugins_section(app: &mut FigApp, ui: &mut Ui) {
     ui.add_space(4.0);
 }
 
+/// The Plugins tab: the plugins that only read the file, or a note when there are none.
+pub fn plugins_tab(app: &mut FigApp, ui: &mut Ui) {
+    let any = app.session.prefs.plugins.iter().any(|p| p.manifest.permissions.access == Access::Read);
+    if any {
+        plugins_section(app, ui);
+    } else {
+        let t = Tokens::get(ui.ctx());
+        widgets::section_header(ui, tr("Plugins"), &[], false);
+        widgets::note(ui, tr("No plugins for Dev Mode yet. Plugins that only read the file run here."), t.text_secondary);
+    }
+}
+
 /// The handoff status of the selected frames or sections (nothing for other layers).
 pub fn status(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     if sel.is_empty() || !sel.iter().all(|i| crate::section_panel::has_status(doc, *i)) {
         return;
     }
-    widgets::separator(ui);
-    widgets::sublabels(ui, tr("Status"), None);
-    let w = ui.available_width() - PAD * 2.0;
-    row(ui, 32.0, |ui| crate::section_panel::status_dropdown(app, ui, doc, sel, w));
+    // The status itself is the header's `</>` button and menu; what's left is its views.
     if let [id] = sel {
         let changed = doc.node(*id).is_some_and(|n| n.dev_status == DevStatus::ReadyForDev && n.dev_changed);
         let ds = app.session.ds().ok();

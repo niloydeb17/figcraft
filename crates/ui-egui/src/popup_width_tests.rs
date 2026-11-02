@@ -80,24 +80,36 @@ fn right_panel_dropdown_menus_fit_the_panel() {
     }
     // With nothing selected, Inspect lists the frames ready for dev under a filter dropdown, the
     // only control on that panel: click down the panel until it opens.
-    let panel_left = SCREEN.x - app.ui.right_width;
-    let x = panel_left + app.ui.right_width / 2.0;
+    // Dev Mode's panel is at least as wide as the kit's.
+    let right = app.ui.right_width.max(crate::state::DEV_PANEL_W);
+    let panel_left = SCREEN.x - right;
+    let x = panel_left + right / 2.0;
+    let dropdown = right - 2.0 * crate::widgets::PAD;
     let mut menu = None;
-    for y in (140..600).step_by(6) {
+    for y in (140..700).step_by(6) {
         let at = pos2(x, y as f32);
         frame(&mut app, press(at, true));
         frame(&mut app, press(at, false));
         frame(&mut app, vec![]);
         frame(&mut app, vec![]);
         if let [m] = menus(&ctx).as_slice() {
-            menu = Some(*m);
-            break;
+            // The Code settings' language and unit chips open narrower menus than the filter
+            // dropdown: close such a menu and go on down the panel.
+            if m.width() >= dropdown - 16.0 {
+                menu = Some(*m);
+                break;
+            }
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() }],
+                );
+            }
         }
     }
     let menu = menu.expect("the Ready for dev filter menu opens");
     // The dropdown spans the panel less its padding; its three short options fit in that.
-    let dropdown = app.ui.right_width - 2.0 * crate::widgets::PAD;
     assert!(menu.width() >= dropdown - 16.0, "menu {menu:?} at least as wide as its dropdown ({dropdown})");
-    assert!(menu.width() <= app.ui.right_width, "menu {menu:?} fits the {} px panel", app.ui.right_width);
+    assert!(menu.width() <= right, "menu {menu:?} fits the {right} px panel");
     assert!(menu.max.x <= SCREEN.x && menu.min.x >= panel_left - 8.0, "menu {menu:?} inside the window, under the panel");
 }

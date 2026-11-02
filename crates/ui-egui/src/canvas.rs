@@ -170,7 +170,7 @@ impl FigApp {
     }
 }
 
-fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) -> PointerEvent {
+pub(crate) fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) -> PointerEvent {
     let p = app.to_page(pos);
     let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
     PointerEvent {
@@ -180,7 +180,8 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
         sx: f64::from(pos.x),
         sy: f64::from(pos.y),
         shift: m.shift,
-        alt: m.alt,
+        // The toolbar's Measurement in Dev Mode holds Alt for the pointer.
+        alt: m.alt || (app.ui.dev.measure_on && app.ui.right_tab == crate::RightTab::Inspect),
         // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does.
         cmd: m.command || app.ui.crop.is_some(),
         ctrl: m.ctrl,

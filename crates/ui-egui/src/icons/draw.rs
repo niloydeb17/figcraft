@@ -1083,6 +1083,12 @@ fn draw(p: &P, icon: Icon) {
         ModeDraw => draw(p, Pencil),
         ModeDesign => draw(p, Frame),
         ModePrototype => draw(p, Prototype),
+        DevCopyColors => draw(p, Eyedropper),
+        DevMeasure => draw(p, Measure),
+        DevAnnotation => draw(p, Comment),
+        Clipboard => draw(p, Export),
+        RailVariables => draw(p, Styles),
+        RailAssets => draw(p, Assets),
         Logo => {
             // FigCraft's own mark: the curled tail of the chameleon on the app icon. One bold
             // stroke: a shaft along the bottom, then three half turns, each tighter than the last.

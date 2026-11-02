@@ -17,10 +17,63 @@ use crate::{FigApp, RightTab};
 pub(crate) const PINK: Color32 = Color32::from_rgb(0xF2, 0x48, 0x8C);
 
 pub(crate) fn pink_label(painter: &egui::Painter, label: String, center: Pos2) {
+    badge(painter, label, center, PINK);
+}
+
+/// Dev Mode's spacing colour, the kit's blue.
+const DEV_BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
+
+/// A readout: white `label` on a `color` pill centred at `center`.
+fn badge(painter: &egui::Painter, label: String, center: Pos2, color: Color32) -> Rect {
     let galley = painter.layout_no_wrap(label, semibold(10.0), Color32::WHITE);
     let rect = Rect::from_center_size(center, galley.size() + vec2(8.0, 4.0));
-    painter.rect_filled(rect, CornerRadius::same(3), PINK);
+    painter.rect_filled(rect, CornerRadius::same(3), color);
     painter.galley(rect.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+    rect
+}
+
+/// The 45° stripes that fill `r`, `spacing` apart along an edge, each running up to the right and
+/// cut to `r`. Their phase is fixed to the screen (the stripes do not slide over a band that
+/// moves), and a very large `r` is capped, so painting one is cheap.
+pub(crate) fn hatch_lines(r: Rect, spacing: f32) -> Vec<[Pos2; 2]> {
+    let mut out = Vec::new();
+    if !(r.width() > 0.0 && r.height() > 0.0 && r.is_finite()) || !(spacing.is_finite() && spacing >= 1.0) {
+        return out;
+    }
+    // A stripe is the points with x + y = c. Whole multiples of `spacing`, from the corner where the
+    // sum is smallest to where it is largest.
+    let first = ((r.min.x + r.min.y) / spacing).ceil() as i64;
+    let last = ((r.max.x + r.max.y) / spacing).floor() as i64;
+    for k in first..=last.min(first + 3000) {
+        let c = k as f32 * spacing;
+        let (x0, x1) = ((c - r.max.y).max(r.min.x), (c - r.min.y).min(r.max.x));
+        if x0 < x1 {
+            out.push([pos2(x0, c - x0), pos2(x1, c - x1)]);
+        }
+    }
+    out
+}
+
+/// A spacing highlight in the kit's style: diagonal stripes in `color`, a line along each long edge,
+/// a dimension line across the band through its middle, and `label` on a pill there.
+pub(crate) fn spacing_band(painter: &egui::Painter, r: Rect, color: Color32, label: String) {
+    let visible = r.intersect(painter.clip_rect());
+    let stripe = Stroke::new(1.0, color.gamma_multiply(0.45));
+    for [a, b] in hatch_lines(visible, 4.0) {
+        painter.line_segment([a, b], stripe);
+    }
+    let edge = Stroke::new(1.0, color);
+    let c = r.center();
+    if r.width() >= r.height() {
+        painter.line_segment([r.left_top(), r.right_top()], edge);
+        painter.line_segment([r.left_bottom(), r.right_bottom()], edge);
+        painter.line_segment([pos2(c.x, r.min.y), pos2(c.x, r.max.y)], edge);
+    } else {
+        painter.line_segment([r.left_top(), r.left_bottom()], edge);
+        painter.line_segment([r.right_top(), r.right_bottom()], edge);
+        painter.line_segment([pos2(r.min.x, c.y), pos2(r.max.x, c.y)], edge);
+    }
+    badge(painter, label, c, color);
 }
 
 #[derive(Clone, Debug)]
@@ -477,14 +530,15 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         Some(Drag::Padding { side, .. }) => Some(*side),
         _ => None,
     };
+    // Pink while designing, the kit's blue in Dev Mode.
+    let color = if app.ui.right_tab == RightTab::Inspect { DEV_BLUE } else { PINK };
     for seg in &z.tracks {
-        painter.add(Shape::dashed_line(seg, Stroke::new(1.0, PINK.gamma_multiply(0.6)), 3.0, 3.0));
+        painter.add(Shape::dashed_line(seg, Stroke::new(1.0, color.gamma_multiply(0.6)), 3.0, 3.0));
     }
     for (side, r, v) in &z.bands {
         let hot = hover.is_some_and(|h| r.contains(h)) || active_side == Some(*side);
         if hot {
-            painter.rect_filled(*r, CornerRadius::ZERO, PINK.gamma_multiply(0.25));
-            pink_label(painter, crate::canvas::fmt(*v), r.center());
+            spacing_band(painter, *r, color, crate::canvas::fmt(*v));
         }
     }
     let drag_key = match &dragging {
@@ -495,10 +549,7 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         let r = g.rect;
         let hot = hover.is_some_and(|h| r.contains(h)) || drag_key == Some(g.key);
         if hot {
-            painter.rect_filled(r, CornerRadius::ZERO, PINK.gamma_multiply(0.3));
-            let c = r.center();
-            painter.line_segment([pos2(c.x - 3.0, c.y), pos2(c.x + 3.0, c.y)], Stroke::new(1.0, PINK));
-            pink_label(painter, crate::canvas::fmt(g.value), c);
+            spacing_band(painter, r, color, crate::canvas::fmt(g.value));
         }
     }
     let _ = Align2::CENTER_CENTER;

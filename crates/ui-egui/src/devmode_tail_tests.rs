@@ -124,6 +124,8 @@ fn dev_mode_layers_panel_selects_and_expands_but_edits_nothing() {
     let order = |u: &crate::layers_drag_tests::Ui| u.app.session.doc().unwrap().node(f).unwrap().children.clone();
     let before = order(&u);
     let (ra, rb) = (u.row_at(a), u.row_at(b));
+    // Where the frame's row is in Dev Mode, whose "Ready for development" block pushes rows down.
+    let rf_dev = u.row_at(f);
     let click = |u: &mut crate::layers_drag_tests::Ui, p: Pos2| {
         u.button(p, true);
         u.button(p, false);
@@ -161,6 +163,8 @@ fn dev_mode_layers_panel_selects_and_expands_but_edits_nothing() {
     // Back in the design, the same double click renames.
     u.app.ui.right_tab = crate::RightTab::Design;
     u.frame(vec![]);
+    // (Dev Mode's "Ready for development" block pushes the rows down: find them again.)
+    let ra = u.row_at(a);
     click(&mut u, ra);
     click(&mut u, ra);
     assert!(u.app.ui.rename.is_some_and(|r| r.id == a));
@@ -172,7 +176,7 @@ fn dev_mode_layers_panel_selects_and_expands_but_edits_nothing() {
     u.drag_to(ra, rf);
     u.app.ui.right_tab = crate::RightTab::Inspect;
     u.frame(vec![]);
-    u.button(rf, false);
+    u.button(rf_dev, false);
     rest(&mut u);
     assert_eq!(order(&u), before, "not reordered after the switch");
     assert!(u.app.ui.toast.as_ref().is_some_and(|(m, _)| m.contains("Shift+D")), "the drop says why");
@@ -184,7 +188,7 @@ fn dev_mode_layers_panel_selects_and_expands_but_edits_nothing() {
     u.drag_to(ea, eb);
     u.app.ui.right_tab = crate::RightTab::Inspect;
     u.frame(vec![]);
-    u.button(eb, false);
+    u.button(Pos2::new(eye, rb.y), false);
     rest(&mut u);
     let doc = u.app.session.doc().unwrap();
     assert!(doc.node(a).unwrap().visible && doc.node(b).unwrap().visible, "not hidden after the switch");

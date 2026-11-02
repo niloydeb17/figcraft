@@ -180,6 +180,15 @@ icons! {
     ModeDraw,
     ModeDesign,
     ModePrototype,
+    /// The Dev Mode toolbar's Copy colors, Measurement and Annotation marks.
+    DevCopyColors,
+    DevMeasure,
+    DevAnnotation,
+    /// The copy button of Dev Mode's code groups.
+    Clipboard,
+    /// The left rail's Variables and Assets buttons.
+    RailVariables,
+    RailAssets,
     /// The prototype preview pane: a small window playing a frame.
     Preview,
     Section2,

@@ -34,6 +34,9 @@ pub const RIGHT_PANEL: std::ops::RangeInclusive<f32> = 240.0..=480.0;
 
 pub const PANEL_DEFAULT: f32 = 240.0;
 
+/// Dev Mode's right panel is at least this wide, as the kit's is.
+pub const DEV_PANEL_W: f32 = 320.0;
+
 /// Windows narrower than this (logical points: phones, portrait tablets) show one side panel at a
 /// time over the canvas, opened from two buttons, instead of both beside it.
 pub const NARROW_WIDTH: f32 = 760.0;

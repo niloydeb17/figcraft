@@ -97,8 +97,11 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     y += 44.0;
     ui.painter().line_segment([pos2(r.min.x + 18.0, y), pos2(r.max.x - 18.0, y)], Stroke::new(1.0, t.border));
     y += 12.0;
-    let items =
-        [(Icon::Page, tr("File"), Some(LeftTab::File)), (Icon::Assets, tr("Assets"), Some(LeftTab::Assets)), (Icon::Styles, tr("Variables"), None)];
+    let items = [
+        (Icon::Page, tr("File"), Some(LeftTab::File)),
+        (Icon::RailAssets, tr("Assets"), Some(LeftTab::Assets)),
+        (Icon::RailVariables, tr("Variables"), None),
+    ];
     for (icon, label, tab) in items {
         let ir = Rect::from_center_size(pos2(r.center().x, y + 14.0), vec2(36.0, 28.0));
         let hit = Rect::from_min_max(pos2(r.min.x, y), pos2(r.max.x, y + 48.0));
@@ -967,6 +970,36 @@ fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 3], hovered: bool) 
     }
 }
 
+/// Dev Mode's "Ready for development" block above the layers: a button that marks the selected
+/// frames or sections ready for dev, then completed once they are.
+fn ready_block(app: &mut FigApp, ui: &mut Ui) {
+    use figcraft_doc::DevStatus;
+    let t = Tokens::get(ui.ctx());
+    let Ok(ds) = app.session.ds() else { return };
+    let (doc, sel) = (ds.doc.clone(), ds.selection.clone());
+    let eligible = !sel.is_empty() && sel.iter().all(|i| crate::section_panel::has_status(&doc, *i));
+    let ready = eligible && sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.dev_status == DevStatus::ReadyForDev));
+    let (label, status) = if ready { (tr("Mark as completed"), DevStatus::Completed) } else { (tr("Mark as ready for dev"), DevStatus::ReadyForDev) };
+    crate::widgets::separator(ui);
+    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+    ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Ready for development"), semibold(11.0), t.text);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+    let resp = resp.tip(if eligible { label } else { tr("Select a frame or section to mark it ready for dev") });
+    a11y::button(&resp, label);
+    let btn = r.shrink2(vec2(8.0, 0.0));
+    if eligible && resp.hovered() {
+        ui.painter().rect_filled(btn, CornerRadius::same(5), t.hover);
+    }
+    let color = if eligible { t.text } else { t.text_tertiary };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(btn.min.x + 20.0, r.center().y), vec2(16.0, 16.0)), Icon::Code, color);
+    ui.painter().text(pos2(btn.min.x + 38.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.0), color);
+    if eligible && resp.clicked() {
+        app.set_props(&sel, json!({"devStatus": status.id()}));
+    }
+    ui.add_space(4.0);
+    crate::widgets::separator(ui);
+}
+
 /// Draw the layer tree with search, cached rows, reveal-selection expansion and scrolling,
 /// rename/Tab navigation, selection and drag/drop, sweep toggles and Dev Mode restrictions.
 fn layers(app: &mut FigApp, ui: &mut Ui) {
@@ -975,6 +1008,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     let dev = app.ui.right_tab == crate::RightTab::Inspect;
     if dev {
         app.ui.rename = None;
+    }
+    if dev {
+        ready_block(app, ui);
     }
     let w = ui.available_width();
     let (hr, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());

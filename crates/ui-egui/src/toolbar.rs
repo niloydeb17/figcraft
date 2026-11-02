@@ -25,9 +25,11 @@ const FLYOUT_GAP: f32 = 1.0;
 // one 32 pt cell, PAD in from its ends and GAP between its top-level items, the divider included.
 /// The UI3 toolbar's colours: the chosen tool's fill (the kit's blue; its hand-off green in Dev
 /// Mode), white on it, and the chosen mode's mark.
-const DESIGN_BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
+pub(crate) const DESIGN_BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
 const HANDOFF_GREEN: Color32 = Color32::from_rgb(0x14, 0xAE, 0x5C);
 const MODE_BLUE: Color32 = Color32::from_rgb(0x00, 0x7B, 0xE5);
+/// The chosen mode's mark on the dark theme.
+const MODE_BLUE_DARK: Color32 = Color32::from_rgb(0x00, 0x9C, 0xFE);
 
 /// The fill of the toolbar's chosen tool and of the Share button for the panel's `tab`.
 pub(crate) fn mode_fill(tab: crate::RightTab) -> Color32 {
@@ -75,6 +77,15 @@ struct Group {
     tools: &'static [(ToolId, Icon)],
     /// What a one-tool group's flyout offers instead of tools (boards: colours, shapes, stamps).
     options: Options,
+    /// Rows after the tools that run a command instead of choosing a tool.
+    extras: &'static [Extra],
+}
+
+/// A flyout row that runs a command: the shape tools' Image/video…
+struct Extra {
+    label: &'static str,
+    icon: Icon,
+    cmd: &'static str,
 }
 
 /// The choices a board tool's flyout shows.
@@ -88,7 +99,10 @@ pub(crate) enum Options {
 
 impl Group {
     const fn tools(key: &'static str, name: &'static str, tools: &'static [(ToolId, Icon)]) -> Group {
-        Group { key, name, tools, options: Options::None }
+        Group { key, name, tools, options: Options::None, extras: &[] }
+    }
+    const fn with(self, extras: &'static [Extra]) -> Group {
+        Group { extras, ..self }
     }
     fn has_flyout(&self) -> bool {
         self.tools.len() > 1 || self.options != Options::None
@@ -109,7 +123,8 @@ const GROUPS: &[Group] = &[
             (ToolId::Polygon, Icon::Polygon),
             (ToolId::Star, Icon::Star),
         ],
-    ),
+    )
+    .with(&[Extra { label: tr_noop("Image/video…"), icon: Icon::Image, cmd: "file.placeImage" }]),
     Group::tools(
         "pen",
         tr_noop("Drawing tools"),
@@ -127,12 +142,12 @@ const BOARD_GROUPS: &[Group] = &[
         tr_noop("Drawing tools"),
         &[(ToolId::Marker, Icon::Marker), (ToolId::Highlighter, Icon::Highlighter), (ToolId::Eraser, Icon::Eraser)],
     ),
-    Group { key: "sticky", name: tr_noop("Sticky note colors"), tools: &[(ToolId::Sticky, Icon::Board)], options: Options::Colors },
-    Group { key: "bshape", name: tr_noop("Shapes"), tools: &[(ToolId::BoardShape, Icon::Shapes)], options: Options::Shapes },
+    Group { key: "sticky", name: tr_noop("Sticky note colors"), tools: &[(ToolId::Sticky, Icon::Board)], options: Options::Colors, extras: &[] },
+    Group { key: "bshape", name: tr_noop("Shapes"), tools: &[(ToolId::BoardShape, Icon::Shapes)], options: Options::Shapes, extras: &[] },
     Group::tools("connector", tr_noop("Connector"), &[(ToolId::Connector, Icon::Connector)]),
     Group::tools("text", tr_noop("Text"), &[(ToolId::Text, Icon::Text)]),
     Group::tools("section", tr_noop("Section"), &[(ToolId::Section, Icon::Section)]),
-    Group { key: "stamp", name: tr_noop("Stamps"), tools: &[(ToolId::Stamp, Icon::Stamp)], options: Options::Stamps },
+    Group { key: "stamp", name: tr_noop("Stamps"), tools: &[(ToolId::Stamp, Icon::Stamp)], options: Options::Stamps, extras: &[] },
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
 ];
 
@@ -169,7 +184,37 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 /// read as one bar.
 pub(crate) fn bar_width(app: &FigApp) -> f32 {
     let board = app.session.doc().is_ok_and(figcraft_engine::board::is_board);
+    if !board && app.ui.right_tab == crate::RightTab::Inspect {
+        return dev_width();
+    }
     main_width(if board { BOARD_GROUPS } else { GROUPS }, board)
+}
+
+/// The Dev Mode pill's width: its five tools, the divider and the mode switcher.
+fn dev_width() -> f32 {
+    PAD + DEV_TOOLS as f32 * (TOOL_CELL + GAP) + DIVIDER + GAP + MODE_W + PAD
+}
+
+/// The buttons of the Dev Mode row: Move, Copy colors, Measurement, Annotation, Comment.
+const DEV_TOOLS: usize = 5;
+
+fn anim_id() -> egui::Id {
+    egui::Id::unique("toolbar_anim")
+}
+
+/// How far the switch to Dev Mode has got, as (the rows' slide, the pill's growth): 0 for the
+/// design pill, 1 for the Dev Mode one. As in the kit the rows slide first and the pill follows a
+/// little behind, each easing out.
+fn mode_anim(app: &FigApp, ctx: &egui::Context, dev: bool) -> (f32, f32) {
+    let time = if app.reduce_motion() { 0.0 } else { 0.66 };
+    mode_progress(ctx.animate_bool_with_time(egui::Id::unique("toolbar_dev"), dev, time))
+}
+
+/// The slide and the growth at `u` (0..1, the switch's linear progress): the rows slide over the
+/// first half, the pill follows from 40% on, each easing out.
+fn mode_progress(u: f32) -> (f32, f32) {
+    let ease = |x: f32| egui::emath::easing::cubic_out(x.clamp(0.0, 1.0));
+    (ease(u / 0.5), ease((u - 0.4) / 0.6))
 }
 
 /// The main toolbar pill's width: the tool groups with their flyout carets, Actions, the divider
@@ -183,23 +228,46 @@ fn main_width(groups: &[Group], board: bool) -> f32 {
 }
 
 /// The main toolbar pill: the tool groups with their flyouts, Actions, then the
-/// Draw · Design · Prototype · Inspect mode switcher (on a board, its two buttons).
+/// Draw · Design · Prototype · Inspect mode switcher (on a board, its two buttons). In Dev Mode the
+/// tools give way to the Dev Mode row (the rows slide, the pill shrinks round the switcher).
 fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: bool) {
     let groups = if board { BOARD_GROUPS } else { GROUPS };
-    let width = main_width(groups, board);
+    // Boards have no Dev Mode.
+    let dev = !board && app.ui.right_tab == crate::RightTab::Inspect;
+    if dev {
+        app.ui.tool_flyout = None;
+    } else {
+        app.ui.dev.measure_on = false;
+    }
+    let (slide, grow) = if board { (0.0, 0.0) } else { mode_anim(app, ui.ctx(), dev) };
+    let design_w = main_width(groups, board);
+    let width = design_w + (dev_width() - design_w) * grow;
+    ui.data_mut(|d| d.insert_temp(anim_id(), (slide, grow, width)));
     let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
     let cy = rect.center().y;
     let scroll = pill_scroll(ui, rect, width);
+    // A pill wider than the canvas (a phone) scrolls, its divider and switcher after the buttons.
+    let scrolling = width > rect.width() + 0.5;
     let outer_clip = ui.clip_rect();
     ui.set_clip_rect(rect.intersect(outer_clip));
     let mut x = rect.min.x + PAD - scroll;
-    for g in groups {
-        x = group_cell(app, ui, g, pos2(x, cy), rect.min.y, t);
+    // The design row slides down out of the pill as the Dev Mode row comes in from above.
+    if slide < 1.0 {
+        let row_y = cy + slide * PILL_H;
+        for g in groups {
+            x = group_cell(app, ui, g, pos2(x, row_y), rect.min.y, t);
+        }
+        x = actions_button(app, ui, x, row_y, t);
     }
-    x = actions_button(app, ui, x, cy, t);
-    divider(ui, t, x, cy);
-    x += DIVIDER + GAP;
+    if slide > 0.0 {
+        let end = dev_row(app, ui, rect.min.x + PAD, cy + (slide - 1.0) * PILL_H, t);
+        if dev {
+            x = end;
+        }
+    }
     if board {
+        divider(ui, t, x, cy);
+        x += DIVIDER + GAP;
         // Boards have no prototypes or Dev Mode; the Design panel is hidden until asked for.
         x = crate::board_picker::button(app, ui, pos2(x, cy), rect.min.y, t) + GAP;
         let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
@@ -208,10 +276,77 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
             app.run("view.design", json!({}));
         }
     } else {
-        mode_switcher(app, ui, x, cy, t);
+        // The switcher stays at the pill's right end while the tools before it change.
+        let switcher = if scrolling { x + DIVIDER + GAP } else { rect.max.x - PAD - MODE_W };
+        divider(ui, t, if scrolling { x } else { switcher - GAP - DIVIDER }, cy);
+        mode_switcher(app, ui, switcher, cy, t);
     }
     ui.set_clip_rect(outer_clip);
     help_button(app, ui, canvas, rect, t);
+}
+
+/// The Dev Mode row from `x` (its left edge, the row's middle): Move, Copy colors, Measurement,
+/// Annotation and Comment. Where the next part starts.
+fn dev_row(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) -> f32 {
+    let tool = app.session.tool.tool;
+    let (measure, copy) = (app.ui.dev.measure_on, app.ui.dev.copy_colors);
+    let cell = |x: f32| Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
+    let step = TOOL_CELL + GAP;
+    let mut x = x;
+
+    let tip = format!("{}  {}", tr(ToolId::Move.label()), pretty_shortcut(ToolId::Move.shortcut()));
+    let active = tool == ToolId::Move && !measure && !copy;
+    let resp = tool_cell(ui, t, cell(x), ("dev", "move"), Icon::Move, active, &tip);
+    if active {
+        a11y::prefer(&mut app.ui.nav, Region::Toolbar, resp.id);
+    }
+    if resp.clicked() {
+        dev_reset(app);
+        choose(app, ToolId::Move);
+    }
+    x += step;
+
+    // Copy colors samples a colour from the canvas onto the clipboard (the picker's eyedropper,
+    // which only samples).
+    if tool_cell(ui, t, cell(x), ("dev", "copy"), Icon::DevCopyColors, copy, tr("Copy colors")).clicked() {
+        dev_reset(app);
+        if !copy {
+            app.ui.dev.copy_colors = true;
+            app.run("edit.pickColor", json!({"apply": false}));
+        }
+    }
+    x += step;
+
+    // Measurement measures from the selection to the layer under the pointer, as holding Alt does.
+    if tool_cell(ui, t, cell(x), ("dev", "measure"), Icon::DevMeasure, measure, tr("Measurement")).clicked() {
+        dev_reset(app);
+        app.ui.dev.measure_on = !measure;
+    }
+    x += step;
+
+    // Annotation starts a note on the selected layer: its field in the Inspect tab takes the keys.
+    if tool_cell(ui, t, cell(x), ("dev", "annotate"), Icon::DevAnnotation, false, tr("Annotation")).clicked() {
+        match app.session.selection().first().copied() {
+            Some(id) => ui.ctx().memory_mut(|m| m.request_focus(egui::Id::unique(("annot_new", id)).with("te"))),
+            None => app.session.message = Some(tr("Select a layer to annotate").to_string()),
+        }
+    }
+    x += step;
+
+    let tip = format!("{}  {}", tr(ToolId::Comment.label()), pretty_shortcut(ToolId::Comment.shortcut()));
+    if tool_cell(ui, t, cell(x), ("dev", "comment"), Icon::Comment, tool == ToolId::Comment, &tip).clicked() {
+        dev_reset(app);
+        choose(app, ToolId::Comment);
+    }
+    x + step
+}
+
+/// Leave Dev Mode's Measurement and Copy colors (a sampling tool in progress included).
+fn dev_reset(app: &mut FigApp) {
+    app.ui.dev.measure_on = false;
+    if std::mem::take(&mut app.ui.dev.copy_colors) && app.session.tool.tool == ToolId::Eyedropper {
+        app.run("tool.move", json!({}));
+    }
 }
 
 /// How far the buttons of a pill `width` wide drawn at `rect` are scrolled: wider than the pill (a
@@ -338,6 +473,8 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
                 t.icon_secondary
             } else if i == 3 {
                 HANDOFF_GREEN
+            } else if t.dark {
+                MODE_BLUE_DARK
             } else {
                 MODE_BLUE
             },
@@ -362,7 +499,13 @@ fn pick_mode(app: &mut FigApp, i: usize) {
             }
         }
         2 => app.ui.right_tab = crate::RightTab::Prototype,
-        _ => app.ui.right_tab = crate::RightTab::Inspect,
+        _ => {
+            app.ui.right_tab = crate::RightTab::Inspect;
+            // Dev Mode only inspects: an editing tool gives way to Move.
+            if !matches!(app.session.tool.tool, ToolId::Move | ToolId::Hand | ToolId::Comment) {
+                app.run("tool.set", json!({"tool": "move"}));
+            }
+        }
     }
 }
 
@@ -628,8 +771,9 @@ fn flyout(app: &mut FigApp, ui: &mut Ui, g: &Group, bottom_left: egui::Pos2) {
     let t = Tokens::get(ui.ctx());
     let item_h = 32.0;
     let w = 220.0;
-    let h = item_h * g.tools.len() as f32 + 16.0;
+    let h = item_h * (g.tools.len() + g.extras.len()) as f32 + 16.0;
     let mut chosen = None;
+    let mut ran = None;
     egui::Area::new(flyout_id(g.key)).fixed_pos(pos2(bottom_left.x, bottom_left.y - h)).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(13), t.menu);
@@ -654,8 +798,30 @@ fn flyout(app: &mut FigApp, ui: &mut Ui, g: &Group, bottom_left: egui::Pos2) {
             }
             y += item_h;
         }
+        // Rows that run a command (Image/video… opens the file dialog) follow the tools.
+        for e in g.extras {
+            let r = Rect::from_min_size(pos2(rect.min.x + 8.0, y), vec2(w - 16.0, item_h));
+            let resp = ui.interact(r, ui.scope_id().with(("fly", e.cmd)), Sense::click());
+            let keys = pretty_shortcut(crate::shortcuts::shortcut(e.cmd).unwrap_or(""));
+            a11y::menu_item(&resp, tr(e.label), &keys, None);
+            a11y::own_focus(&resp);
+            if resp.hovered() || resp.has_focus() {
+                ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
+            }
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 32.0, r.center().y), vec2(16.0, 16.0)), e.icon, t.menu_text);
+            ui.painter().text(pos2(r.min.x + 48.0, r.center().y), Align2::LEFT_CENTER, tr(e.label), regular(12.0), t.menu_text);
+            ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, keys, regular(12.0), t.menu_dim);
+            if resp.clicked() {
+                ran = Some(e.cmd);
+            }
+            y += item_h;
+        }
     });
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.ui.tool_flyout = None;
+    }
+    if let Some(cmd) = ran {
+        crate::menus::invoke(app, cmd);
         app.ui.tool_flyout = None;
     }
     if let Some(tid) = chosen {
@@ -684,6 +850,36 @@ fn flyout_id(key: &str) -> egui::Id {
 /// "Shift+Cmd+K" → "⇧⌘K" on macOS, "Ctrl+Shift+K" elsewhere.
 pub fn pretty_shortcut(s: &str) -> String {
     figcraft_engine::keymap::display(s, crate::shortcuts::platform())
+}
+
+#[cfg(test)]
+pub(crate) fn mode_progress_for_tests(u: f32) -> (f32, f32) {
+    mode_progress(u)
+}
+
+/// (slide, growth, width) of the main pill as last drawn.
+#[cfg(test)]
+pub(crate) fn anim_state(ctx: &egui::Context) -> Option<(f32, f32, f32)> {
+    ctx.data(|d| d.get_temp(anim_id()))
+}
+
+/// The middle of the Dev Mode row's `i`th button in a pill at `pill`.
+#[cfg(test)]
+pub(crate) fn dev_cell_centre(pill: Rect, i: usize) -> egui::Pos2 {
+    pos2(pill.min.x + PAD + i as f32 * (TOOL_CELL + GAP) + TOOL_CELL / 2.0, pill.center().y)
+}
+
+/// The middle of the shape group's flyout caret in a design pill at `pill`, and of the flyout's
+/// last row once it is open.
+#[cfg(test)]
+pub(crate) fn shape_flyout_points(pill: Rect) -> (egui::Pos2, egui::Pos2) {
+    let group = TOOL_CELL + FLYOUT_GAP + FLYOUT_W;
+    let cell_left = pill.min.x + PAD + 2.0 * (group + GAP);
+    let caret = pos2(cell_left + TOOL_CELL + FLYOUT_GAP + FLYOUT_W / 2.0, pill.center().y);
+    let shape = &GROUPS[2];
+    let rows = (shape.tools.len() + shape.extras.len()) as f32;
+    let top = pill.min.y - 8.0 - (32.0 * rows + 16.0);
+    (caret, pos2(cell_left + 60.0, top + 8.0 + 32.0 * (rows - 0.5)))
 }
 
 #[cfg(test)]

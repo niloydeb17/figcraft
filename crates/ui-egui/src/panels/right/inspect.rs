@@ -1,3 +1,4 @@
+use super::dev_panel;
 use super::menu::{menu_item, menu_popup, row};
 use super::{
     Align2, Color32, CornerRadius, Document, ExportFormat, ExportSetting, FigApp, Icon, Id, NodeId, PAD, Paint, Rect, Sense, Stroke, Tip, Tokens, Ui,
@@ -178,105 +179,97 @@ fn inspect_assets(app: &mut FigApp, ui: &mut Ui, doc: &Document, assets: &[figcr
     ui.add_space(4.0);
 }
 
-/// The Inspect tab (Dev Mode): the handoff status, annotations, properties, assets and code of
-/// the selected layer, or the list of what's ready for dev.
+/// The Inspect tab (Dev Mode), in the kit's layout: the layer's header, its handoff status, MCP,
+/// Connect to code and Layer properties (the box model, then the properties as a list or as code),
+/// then annotations, measurements and assets; or the list of what's ready for dev. The Plugins tab
+/// lists the plugins that only read the file.
 pub(super) fn inspect(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    if app.ui.dev.plugins_tab {
+        crate::dev_mode::plugins_tab(app, ui);
+        return;
+    }
     let Ok(ds) = app.session.ds() else { return };
     let doc = ds.doc.clone();
     let sel = ds.selection.clone();
     let Some(first) = sel.first().copied() else {
-        widgets::section_header(ui, tr("Inspect"), &[], false);
+        dev_panel::page_header(ui, &doc, ds.page);
+        widgets::separator(ui);
+        dev_panel::code_settings(ui);
+        widgets::separator(ui);
         widgets::note(ui, tr("Select a layer to see its properties and code"), t.text_secondary);
         widgets::note(ui, tr("Hover other layers to measure the distance"), t.text_secondary);
         crate::dev_mode::ready_list(app, ui);
         crate::dev_mode::categories_section(app, ui);
         crate::dev_mode::measurements_section(app, ui, &doc, &sel);
-        crate::dev_mode::plugins_section(app, ui);
         return;
     };
-    // The layer's name on one line: a long one ends with an ellipsis and shows in full on hover (#1650).
-    let name = doc.node(first).map(|n| n.name.replace(['\r', '\n'], " ")).unwrap_or_default();
-    let shown = widgets::elide_font(ui, &name, ui.available_width() - PAD - widgets::PAD_RIGHT, semibold(11.0));
-    let (_, header) = widgets::section_header_resp(ui, &shown, &[], false);
-    if shown != name {
-        header.on_hover_text(name);
-    }
+    let lang = dev_panel::current_lang(ui);
+    // A component tried with other property values: its code replaces the layer's.
+    let played = crate::dev_mode::playground_section(app, ui, &doc, first, lang);
+    let layer_code = crate::dev_mode::code(app, ui, first, lang);
+    let code = played.unwrap_or_else(|| layer_code.clone());
+    dev_panel::layer_header(app, ui, &doc, first, &layer_code);
     crate::dev_mode::status(app, ui, &doc, &sel);
+    widgets::separator(ui);
+    dev_panel::mcp(app, ui, &doc, first, &layer_code);
+    widgets::separator(ui);
+    if figcraft_engine::code_connect::owner(&doc, first).is_some() {
+        crate::dev_mode::connect_section(app, ui, &doc, first, lang);
+    } else {
+        dev_panel::code_connect_intro(ui);
+    }
+    widgets::separator(ui);
+    let (open, _) = dev_panel::section(ui, "layer_properties", tr("Layer properties"), None, &[]);
+    if open {
+        dev_panel::box_model(ui, &doc, first);
+        let (code_view, lang_chip) = dev_panel::view_switch(ui, Some(lang.label()));
+        if let Some(chip) = &lang_chip {
+            dev_panel::language_menu(chip);
+        }
+        if code_view {
+            inspect_code(app, ui, &code, lang);
+        } else {
+            use figcraft_engine::devinspect::ColorFormat;
+            let fmt_id = Id::unique("inspect_color_format");
+            let fmt = ui.data(|d| d.get_temp::<usize>(fmt_id)).and_then(|i| ColorFormat::ALL.get(i).copied()).unwrap_or_default();
+            row(ui, 32.0, |ui| {
+                widgets::label(ui, tr("Color format"), t.text_secondary);
+                let resp = widgets::dropdown(ui, fmt.label(), 72.0, None);
+                menu_popup(&resp).show(|ui| {
+                    for (i, f) in ColorFormat::ALL.iter().enumerate() {
+                        if menu_item(ui, f.label(), "") {
+                            ui.data_mut(|d| d.insert_temp(fmt_id, i));
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            for s in figcraft_engine::devinspect::properties_with(&doc, first, fmt) {
+                inspect_section(app, ui, &s);
+            }
+        }
+    }
     crate::dev_mode::annotations_section(app, ui, &doc, first);
     crate::dev_mode::dev_resources_section(app, ui, &doc, first);
     crate::dev_mode::measurements_section(app, ui, &doc, &sel);
-    use figcraft_engine::devinspect::ColorFormat;
-    let fmt_id = Id::unique("inspect_color_format");
-    let fmt = ui.data(|d| d.get_temp::<usize>(fmt_id)).and_then(|i| ColorFormat::ALL.get(i).copied()).unwrap_or_default();
-    row(ui, 32.0, |ui| {
-        widgets::label(ui, tr("Color format"), t.text_secondary);
-        let resp = widgets::dropdown(ui, fmt.label(), 72.0, None);
-        menu_popup(&resp).show(|ui| {
-            for (i, f) in ColorFormat::ALL.iter().enumerate() {
-                if menu_item(ui, f.label(), "") {
-                    ui.data_mut(|d| d.insert_temp(fmt_id, i));
-                    ui.close();
-                }
-            }
-        });
-    });
-    for s in figcraft_engine::devinspect::properties_with(&doc, first, fmt) {
-        inspect_section(app, ui, &s);
-    }
     inspect_assets(app, ui, &doc, &figcraft_engine::devinspect::assets(&doc, &sel));
+}
+
+/// The Code view of Layer properties: the code (CSS in its Layout, Typography and Style groups,
+/// anything else as one block), each group with its own copy button. The language is the chip beside
+/// the List | Code switch and the unit a setting of the page's Code settings.
+fn inspect_code(app: &mut FigApp, ui: &mut Ui, code: &str, lang: figcraft_engine::codegen::CodeLang) {
     use figcraft_engine::codegen::CodeLang;
-    let lang_id = Id::unique("inspect_lang");
-    let lang = ui.data(|d| d.get_temp::<usize>(lang_id)).and_then(|i| CodeLang::ALL.get(i).copied()).unwrap_or_default();
-    // A component tried with other property values: its code replaces the layer's below.
-    let played = crate::dev_mode::playground_section(app, ui, &doc, first, lang);
-    widgets::separator(ui);
-    let copy = widgets::section_header(ui, tr("Code"), &[(Icon::Export, tr("Copy"))], false).is_some();
-    // Pixels or rem (of a 16 px root) for the web languages.
-    let rem_id = Id::unique("inspect_rem");
-    let web = lang.is_web();
-    let rem = web && ui.data(|d| d.get_temp::<bool>(rem_id)).unwrap_or(false);
-    row(ui, 32.0, |ui| {
-        let resp = widgets::dropdown(ui, lang.label(), 120.0, Some(Icon::Code));
-        menu_popup(&resp).show(|ui| {
-            for (i, l) in CodeLang::ALL.iter().enumerate() {
-                if menu_item(ui, l.label(), "") {
-                    ui.data_mut(|d| d.insert_temp(lang_id, i));
-                    ui.close();
-                }
-            }
-        });
-        if web {
-            let resp = widgets::dropdown(ui, if rem { "rem" } else { "px" }, 56.0, None);
-            menu_popup(&resp).show(|ui| {
-                for (on, label) in [(false, "px"), (true, "rem")] {
-                    if menu_item(ui, label, "") {
-                        ui.data_mut(|d| d.insert_temp(rem_id, on));
-                        ui.close();
-                    }
-                }
-            });
+    let rem = lang.is_web() && ui.data(|d| d.get_temp::<bool>(dev_panel::rem_id())).unwrap_or(false);
+    let code = if rem { figcraft_engine::codegen::px_to_rem(code, 16.0) } else { code.to_string() };
+    let groups = if lang == CodeLang::Css { dev_panel::css_groups(&code) } else { Vec::new() };
+    if groups.is_empty() {
+        let lines: Vec<String> = code.lines().map(str::to_string).collect();
+        dev_panel::code_group(app, ui, "Code", &lines, false);
+    } else {
+        for (label, lines) in &groups {
+            dev_panel::code_group(app, ui, label, lines, true);
         }
-    });
-    let code = played.unwrap_or_else(|| crate::dev_mode::code(app, ui, first, lang));
-    let code = if rem { figcraft_engine::codegen::px_to_rem(&code, 16.0) } else { code };
-    egui::Frame::NONE
-        .fill(t.field)
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin::same(10))
-        .outer_margin(egui::Margin::symmetric(16, 0))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(&code).monospace().color(t.text));
-        });
-    ui.add_space(8.0);
-    let mut copy_clicked = copy;
-    row(ui, 32.0, |ui| {
-        copy_clicked |= ui.button(trf("Copy {value}", &[("value", &lang.label())])).clicked();
-    });
-    if copy_clicked {
-        app.clipboard_set_text(&code);
-        app.toast(trf("Copied {value}", &[("value", &lang.label())]));
     }
-    crate::dev_mode::connect_section(app, ui, &doc, first, lang);
-    crate::dev_mode::plugins_section(app, ui);
 }

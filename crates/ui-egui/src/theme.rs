@@ -121,7 +121,7 @@ impl Tokens {
             success: DEV_READY,
             warning: Color32::from_rgb(0xFF, 0xCD, 0x29),
             guide: Color32::from_rgb(0xF2, 0x48, 0x22),
-            tab_bar: Color32::from_rgb(0xE8, 0xE8, 0xE8),
+            tab_bar: Color32::from_rgb(0xF2, 0xF5, 0xF8),
             tab_active: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             shadow: Color32::from_black_alpha(40),
             menu: Color32::from_rgb(0x1E, 0x1E, 0x1E),

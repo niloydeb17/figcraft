@@ -94,6 +94,8 @@ fn the_assets_list_shows_a_slice_with_a_preview_name_and_export_format() {
     s.execute("select.set", &json!({"ids": [slice]})).unwrap();
     let mut u = crate::layers_drag_tests::Ui::new(s);
     u.app.ui.right_tab = crate::RightTab::Inspect;
+    // The assets come after Layer properties: fold it away so they are on screen.
+    u.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("dev_section", "layer_properties")), false));
     u.ctx.enable_accesskit();
     let out = u.frame_output(vec![]);
     let nodes: Vec<egui::accesskit::Node> =

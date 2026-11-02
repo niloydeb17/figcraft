@@ -135,7 +135,10 @@ impl FigApp {
         self.ui.dark = dark;
         // New files take the theme's page colour (existing pages keep theirs).
         self.session.set_ui_dark(dark);
-        theme::apply_with(ctx, if dark { theme::Tokens::dark() } else { theme::Tokens::light() }, self.reduce_motion());
+        // Dev Mode's panels and toolbar are dark, as in the kit, whatever the theme; the canvas keeps
+        // its page's colour.
+        let dev_mode = self.ui.right_tab == crate::RightTab::Inspect && !self.session.doc().is_ok_and(figcraft_engine::board::is_board);
+        theme::apply_with(ctx, if dark || dev_mode { theme::Tokens::dark() } else { theme::Tokens::light() }, self.reduce_motion());
         if self.worker.is_none() {
             self.worker = Some(render_worker::Worker::new(ctx.clone()));
         }
@@ -295,7 +298,10 @@ impl FigApp {
             let w = (ui.available_width() - MOBILE_STRIP).max(0.0);
             (if left_open { w } else { 0.0 }, w)
         } else {
-            fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), right_open.then_some(self.ui.right_width))
+            // Dev Mode's panel is wider: its code and the box model need the room.
+            let dev = self.ui.right_tab == RightTab::Inspect;
+            let right = if dev { self.ui.right_width.max(crate::state::DEV_PANEL_W) } else { self.ui.right_width };
+            fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), right_open.then_some(right))
         };
         let rows = ui.available_rect_before_wrap().y_range();
         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();

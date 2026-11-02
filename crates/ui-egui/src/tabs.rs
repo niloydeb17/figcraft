@@ -13,7 +13,8 @@ use crate::present::{PresentTab, Presenter};
 use crate::theme::{Tokens, regular};
 use crate::{FigApp, TitleBar};
 
-pub const HEIGHT: f32 = 40.0;
+/// The kit's tab bar is 36 pt tall.
+pub const HEIGHT: f32 = 36.0;
 const MIN_TAB_WIDTH: f32 = 96.0;
 const OVERFLOW_WIDTH: f32 = 32.0;
 const OPEN_TIME: f64 = 0.18;
@@ -97,16 +98,28 @@ fn tab_drop_position(visible: &[(usize, Rect)], from: usize, pointer_x: f32) -> 
     }
 }
 
+/// A separator between the bar's parts: a full-height line, as the kit draws them.
+fn separator(ui: &Ui, t: &Tokens, x: f32, rect: Rect) {
+    let color = if t.dark { t.border } else { Color32::from_rgb(0xD8, 0xDB, 0xDE) };
+    ui.painter().line_segment([pos2(x + 0.5, rect.min.y), pos2(x + 0.5, rect.max.y)], Stroke::new(1.0, color));
+}
+
 /// Draw the top tab bar: Home, document and presenter tabs, new-tab and window controls,
 /// open/close/reorder animation and tab closing, pausing the presenter when going Home.
 pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("tab_bar").exact_size(HEIGHT).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
         let rect = ui.max_rect();
+        // A line along the bottom edge; the active tab (white) is drawn over it and joins the page.
+        let bottom = if t.dark { t.border } else { Color32::from_rgb(0xDB, 0xDE, 0xE0) };
+        ui.painter().line_segment([pos2(rect.min.x, rect.max.y - 0.5), pos2(rect.max.x, rect.max.y - 0.5)], Stroke::new(1.0, bottom));
         let buttons_w = if app.ui.title_bar == TitleBar::Custom { window_buttons(app, ui, rect) } else { 0.0 };
-        let mut x = rect.min.x + if app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
+        let mut x = rect.min.x + if app.ui.title_bar == TitleBar::Inset { 80.0 } else { 8.0 };
+        if app.ui.title_bar == TitleBar::Inset {
+            separator(ui, &t, x - 1.0, rect);
+        }
         x += home_tab(app, ui, &t, x, rect);
-        ui.painter().line_segment([pos2(x, rect.min.y), pos2(x, rect.max.y)], Stroke::new(1.0, t.border));
+        separator(ui, &t, x, rect);
         let document_tabs: Vec<usize> = app.session.docs.iter().enumerate().filter_map(|(i, d)| app.shows(d.uid).then_some(i)).collect();
         let now = ui.input(|input| input.time);
         let motion_id = ui.scope_id().with("tab_motion");
@@ -194,7 +207,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 close = Some(i);
             }
             x += w;
-            ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
+            separator(ui, &t, x, rect);
         }
         let visible: Vec<(usize, Rect)> = tab_rects.iter().copied().enumerate().map(|(slot, r)| (document_tabs[layout.first + slot], r)).collect();
         if let Some((from, p)) = dragging
@@ -223,7 +236,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 close_present_tab = Some(tab.id);
             }
             x += w;
-            ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
+            separator(ui, &t, x, rect);
         }
         if present_layout.overflow {
             let resp = overflow_button(ui, &t, pos2(x, rect.min.y), "present_overflow", tr("Open presentations"));
@@ -236,7 +249,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         if nresp.hovered() {
             ui.painter().rect_filled(nr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon);
+        icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon_secondary);
         if nresp.clicked() {
             pause_present(app);
             app.run("file.new", json!({}));
@@ -320,7 +333,7 @@ fn close_tab(app: &mut FigApp, ui: &Ui, i: usize) {
 /// The Home tab at `x`; returns its width. Without inset window buttons its divider continues the
 /// icon rail's edge below.
 fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f32 {
-    let w = if app.ui.title_bar == TitleBar::Inset { 44.0 } else { rect.min.x + crate::layers::RAIL_WIDTH - x };
+    let w = if app.ui.title_bar == TitleBar::Inset { 40.0 } else { rect.min.x + crate::layers::RAIL_WIDTH - x };
     let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT));
     let hresp = ui.interact(hr, ui.scope_id().with("home"), Sense::click()).tip(tr("Home"));
     let home_active = (app.ui.home || !app.has_files()) && app.ui.present.is_none();
@@ -330,7 +343,7 @@ fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f3
     } else if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
+    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon_secondary);
     if hresp.clicked() {
         pause_present(app);
         app.ui.home = true;
@@ -475,7 +488,7 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
         &painter,
         Rect::from_center_size(pos2(paint_r.min.x + 18.0, paint_r.center().y), vec2(14.0, 14.0)),
         icons::file_mark(kind),
-        crate::theme::ACCENT.linear_multiply(progress),
+        if active { crate::toolbar::DESIGN_BLUE } else { t.icon_secondary }.linear_multiply(progress),
     );
     // The unsaved-changes dot follows the name on screen, whichever way the name reads.
     let shown = crate::bidi::paint_name(
@@ -483,7 +496,7 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
         pos2(paint_r.min.x + 32.0, paint_r.center().y),
         name,
         regular(12.0),
-        t.text.linear_multiply(progress),
+        if active { t.text } else { t.text_secondary }.linear_multiply(progress),
         (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
     );
     if let Some(shared) = live {
@@ -518,8 +531,9 @@ fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool)
     } else if hovered {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
-    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
+    let (icon, text) = if active { (t.icon, t.text) } else { (t.icon_secondary, t.text_secondary) };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, icon);
+    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), text, r.width() - 62.0);
     if hovered || active {
         let cr = Rect::from_center_size(close_r.center(), vec2(18.0, 18.0));
         if cresp.hovered() {

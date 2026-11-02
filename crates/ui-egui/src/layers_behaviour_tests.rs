@@ -263,7 +263,7 @@ fn pages_search_filters_page_names_case_insensitively() {
     assert!(!text.iter().any(|(label, _, _)| label == "Library"), "nonmatching pages are filtered out");
 
     // Search leaves only Components; the active page starts as Library.
-    for y in (150..400).step_by(4) {
+    for y in (100..400).step_by(4) {
         let p = Pos2::new(150.0, y as f32);
         u.button(p, true);
         u.button(p, false);

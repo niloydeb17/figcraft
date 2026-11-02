@@ -141,10 +141,10 @@ fn num(v: &Value) -> f64 {
 fn presenter_scales_by_its_options_and_pans_what_overflows() {
     let (mut u, big) = big();
     let at = pos2(720.0, 470.0);
-    // Fit: the tab strip leaves 1376×756 inside the presenter's padding; nothing pans.
+    // Fit: the tab strip leaves 1376×760 inside the presenter's padding; nothing pans.
     let p = presenter(&u);
     assert_eq!(p["scale"], "fit");
-    assert!((num(&p["zoom"]) - 756.0 / 3000.0).abs() < 1e-3, "{p}");
+    assert!((num(&p["zoom"]) - 760.0 / 3000.0).abs() < 1e-3, "{p}");
     assert_eq!(p["panRange"], json!([0.0, 0.0]));
     // Z: fit width (the whole 1440 width; the rest of the height pans).
     u.key(at, Key::Z);
@@ -152,14 +152,14 @@ fn presenter_scales_by_its_options_and_pans_what_overflows() {
     assert_eq!(p["scale"], "fitWidth");
     assert!((num(&p["zoom"]) - 0.72).abs() < 1e-3, "{p}");
     assert_eq!(p["panRange"][0], 0.0);
-    assert!((num(&p["panRange"][1]) - (2160.0 - 820.0)).abs() < 1.0, "{p}");
+    assert!((num(&p["panRange"][1]) - (2160.0 - 824.0)).abs() < 1.0, "{p}");
     // Z: fill (here the width decides too), then 100%: both ways overflow, centred across at the top.
     u.key(at, Key::Z);
     assert_eq!(presenter(&u)["scale"], "fill");
     u.key(at, Key::Z);
     let p = presenter(&u);
     assert_eq!((p["scale"].as_str(), num(&p["zoom"])), (Some("actual"), 1.0));
-    assert_eq!(p["panRange"], json!([624.0, 2244.0]));
+    assert_eq!(p["panRange"], json!([624.0, 2240.0]));
     assert_eq!(p["pan"], json!([312.0, 0.0]));
     // The wheel pans down; a drag pans with the pointer.
     let wheel = move || {
@@ -217,7 +217,7 @@ fn devices_turn_and_their_frame_can_hide() {
     let with_body = num(&presenter(&u)["zoom"]);
     u.run("proto.presentOptions", json!({"deviceFrame": false}));
     let bare = num(&presenter(&u)["zoom"]);
-    assert!(bare > with_body && (bare - 756.0 / 852.0).abs() < 1e-3, "{with_body} {bare}");
+    assert!(bare > with_body && (bare - 760.0 / 852.0).abs() < 1e-3, "{with_body} {bare}");
     // A device offers no fit width: Z goes fit → fill → 100%.
     u.key(pos2(720.0, 470.0), Key::Z);
     assert_eq!(presenter(&u)["scale"], "fill");

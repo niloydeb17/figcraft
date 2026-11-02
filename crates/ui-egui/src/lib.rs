@@ -96,6 +96,8 @@ mod design_paste_tests;
 #[cfg(test)]
 mod dev_mode_tests;
 #[cfg(test)]
+mod dev_panel_tests;
+#[cfg(test)]
 mod devmode_tail_tests;
 #[cfg(test)]
 mod display_name_tests;
@@ -233,6 +235,8 @@ mod shortcut_keys_tests;
 #[cfg(test)]
 mod shortcuts_tests;
 #[cfg(test)]
+mod spacing_band_tests;
+#[cfg(test)]
 mod stroke_row_tests;
 #[cfg(test)]
 mod style_folder_rename_tests;
@@ -244,6 +248,8 @@ mod table_paste_tests;
 mod text_enter_tests;
 #[cfg(test)]
 mod titlebar_tests;
+#[cfg(test)]
+mod toolbar_dev_tests;
 #[cfg(test)]
 mod ui_params_tests;
 #[cfg(test)]

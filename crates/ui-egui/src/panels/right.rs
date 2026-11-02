@@ -21,6 +21,7 @@ use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
 use crate::{FigApp, RightTab};
 
+pub(crate) mod dev_panel;
 mod effects;
 mod inspect;
 mod menu;
@@ -160,21 +161,35 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let (tabs, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     ui.painter().line_segment([tabs.left_top(), tabs.right_top()], Stroke::new(1.0, t.border));
     let mut x = tabs.min.x + 8.0;
-    for (tab, label) in [(RightTab::Design, tr("Design")), (RightTab::Prototype, tr("Prototype"))] {
+    // Dev Mode has Inspect and Plugins; the other modes Design and Prototype.
+    let dev = app.ui.right_tab == RightTab::Inspect;
+    let tab_list: Vec<(&str, bool, Option<RightTab>)> = if dev {
+        vec![(tr("Inspect"), !app.ui.dev.plugins_tab, None), (tr("Plugins"), app.ui.dev.plugins_tab, None)]
+    } else {
+        vec![
+            (tr("Design"), app.ui.right_tab == RightTab::Design, Some(RightTab::Design)),
+            (tr("Prototype"), app.ui.right_tab == RightTab::Prototype, Some(RightTab::Prototype)),
+        ]
+    };
+    for (i, (label, active, tab)) in tab_list.into_iter().enumerate() {
         let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), t.text);
         let r = Rect::from_min_size(pos2(x, tabs.center().y - 12.0), vec2(galley.size().x + 16.0, 24.0));
         let resp = ui.interact(r, ui.scope_id().with(("rtab", label)), Sense::click());
-        let active = app.ui.right_tab == tab;
         a11y::tab(&resp, label, active);
         if active {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
         ui.painter().galley(pos2(r.min.x + 8.0, r.center().y - galley.size().y / 2.0), galley, if active { t.text } else { t.text_secondary });
         if resp.clicked() {
-            if app.ui.right_tab != tab {
-                crate::proto_panel::open_editor(ui.ctx(), None);
+            match tab {
+                Some(tab) => {
+                    if app.ui.right_tab != tab {
+                        crate::proto_panel::open_editor(ui.ctx(), None);
+                    }
+                    app.ui.right_tab = tab;
+                }
+                None => app.ui.dev.plugins_tab = i == 1,
             }
-            app.ui.right_tab = tab;
         }
         x = r.max.x + 2.0;
     }
