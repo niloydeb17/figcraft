@@ -1,8 +1,21 @@
 # FigCraft on kubelet.cloud: the web editor (built from this repository) and the collaboration
 # server behind one host name. Deployed by Dokploy (Compose, GitHub provider) on every push to main.
 services:
+  # The server runs as an unprivileged user (uid 65532). A volume first made by an older root image
+  # stays owned by root, and the server then stops on "can't restrict the data directory". Hand the
+  # volume to that user before the server starts.
+  data-init:
+    image: busybox:1.36
+    restart: "no"
+    command: ["sh", "-c", "chown -R 65532:65532 /data && chmod 700 /data"]
+    volumes:
+      - figcraft-data:/data
+
   server:
     restart: unless-stopped
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
     build:
       context: ../..
       dockerfile: packaging/server/Dockerfile
