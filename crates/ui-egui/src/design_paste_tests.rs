@@ -123,3 +123,16 @@ fn text_copied_after_a_design_paste_pastes_as_text() {
     crate::menus::paste(&mut app, None, None);
     assert_eq!(pasted_text(&app), "Fresh text");
 }
+
+#[test]
+fn a_browser_paste_key_with_no_text_takes_the_pasted_design_layers() {
+    // The browser sends Cmd/Ctrl+V as a key and, for layers copied in another design app, no text
+    // with its paste event: the page hands the paste's HTML over as the clipboard's.
+    let mut u = crate::layers_drag_tests::Ui::new(Session::new());
+    u.app.services = Box::new(Clip { html: copied_html(), text: None });
+    let cmd = egui::Modifiers::COMMAND;
+    let key = |pressed| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers: cmd };
+    u.frame_with(vec![key(true)], cmd);
+    u.frame_with(vec![key(false)], egui::Modifiers::NONE);
+    assert_eq!(selected_names(&u.app), ["Copied layer"]);
+}
