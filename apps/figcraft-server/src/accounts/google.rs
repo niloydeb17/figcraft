@@ -13,6 +13,14 @@ use sha2::{Digest, Sha256};
 
 /// The environment variable holding the client secret (never in the settings file).
 pub const SECRET_ENV: &str = "FIGCRAFT_GOOGLE_CLIENT_SECRET";
+/// The client id can come from the environment too (when `google_client_id` is empty).
+pub const ID_ENV: &str = "FIGCRAFT_GOOGLE_CLIENT_ID";
+
+/// The client id to use: the setting, else `env` (the environment's), when it looks like one.
+pub fn client_id(setting: &str, env: &str) -> Option<String> {
+    let id = if setting.trim().is_empty() { env.trim() } else { setting.trim() };
+    (!id.is_empty() && id.len() <= 256 && !id.contains(char::is_whitespace) && !id.contains(char::is_control)).then(|| id.to_string())
+}
 
 const AUTHORIZE: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN: &str = "https://oauth2.googleapis.com/token";

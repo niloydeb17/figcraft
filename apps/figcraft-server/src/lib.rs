@@ -115,16 +115,22 @@ fn origin(url: &str) -> Option<String> {
 fn start_accounts(cfg: &Config, at: SocketAddr, key: &str) -> Result<AuthServer, String> {
     let accounts = Accounts::open(&cfg.data, cfg.signup, cfg.session_days)?;
     let web = cfg.web()?;
-    let id = cfg.google_client_id.trim();
+    let id = google::client_id(&cfg.google_client_id, &std::env::var(google::ID_ENV).unwrap_or_default());
     let secret = std::env::var(google::SECRET_ENV).unwrap_or_default();
-    let google = if id.is_empty() {
-        None
-    } else if secret.trim().is_empty() {
-        log::warn!("accounts: google_client_id is set but {} is empty: Google sign-in stays off", google::SECRET_ENV);
-        None
-    } else {
-        let base = if web.ends_with('/') { web.clone() } else { format!("{web}/") };
-        Some(google::Client { id: id.to_string(), secret: secret.trim().to_string(), redirect: format!("{base}auth/google/callback") })
+    let google = match id {
+        None => None,
+        Some(id) if web.is_empty() => {
+            log::warn!("accounts: a Google client id ({id}) is set but web_url isn't: Google sign-in stays off");
+            None
+        }
+        Some(id) if secret.trim().is_empty() => {
+            log::warn!("accounts: a Google client id ({id}) is set but {} is empty: Google sign-in stays off", google::SECRET_ENV);
+            None
+        }
+        Some(id) => {
+            let base = if web.ends_with('/') { web.clone() } else { format!("{web}/") };
+            Some(google::Client { id, secret: secret.trim().to_string(), redirect: format!("{base}auth/google/callback") })
+        }
     };
     let settings = Settings {
         origin: origin(&web),

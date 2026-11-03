@@ -13,7 +13,7 @@ max_file_mb = 64
 
 # Accounts: the sign-in page at https://figcraft.kubelet.cloud/login (nginx in the web container
 # sends /login, /logout and /auth/ here). Anyone may sign up; `signup = false` closes it. Google
-# sign-in turns on with `google_client_id` here plus FIGCRAFT_GOOGLE_CLIENT_SECRET in Dokploy's
+# sign-in turns on with FIGCRAFT_GOOGLE_CLIENT_ID and FIGCRAFT_GOOGLE_CLIENT_SECRET in Dokploy's
 # environment for this compose.
 accounts_listen = "0.0.0.0:47901"
 

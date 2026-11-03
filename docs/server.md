@@ -349,8 +349,10 @@ terms_url = ""                              # shown under the form when set
   is `https://`). Ten wrong passwords in 15 minutes pause an account's sign-in for 15 minutes, and
   the whole server makes at most 120 accounts an hour. `GET /auth/me` says who is signed in.
 - **Google.** Create an OAuth client (type *Web application*) in Google Cloud's console with the
-  redirect URI `<web_url>auth/google/callback`, set `google_client_id`, and give the server its
-  secret in the environment as `FIGCRAFT_GOOGLE_CLIENT_SECRET` (never in the settings file). The
+  redirect URI `<web_url>auth/google/callback`, set `google_client_id` (or
+  `FIGCRAFT_GOOGLE_CLIENT_ID` in the environment), and give the server its secret in the
+  environment as `FIGCRAFT_GOOGLE_CLIENT_SECRET` (never in the settings file). The log says at
+  startup whether Google sign-in is on, and why not. The
   page then shows **Continue with Google**. A Google sign-in whose verified email has an account
   joins it, and that account's password is dropped (nobody checked that email when it was made).
 - **The app for signed-in people only.** `GET /auth/check` answers 204 for a signed-in browser

@@ -87,8 +87,9 @@ pub struct Config {
     pub signup: bool,
     /// Days a sign-in lasts without being used.
     pub session_days: f64,
-    /// A Google OAuth client id: "Continue with Google" is offered once this is set and the
-    /// environment has its secret (`FIGCRAFT_GOOGLE_CLIENT_SECRET`). Its redirect URI is
+    /// A Google OAuth client id (empty: `FIGCRAFT_GOOGLE_CLIENT_ID` from the environment):
+    /// "Continue with Google" is offered once there is one and the environment has its secret
+    /// (`FIGCRAFT_GOOGLE_CLIENT_SECRET`). Its redirect URI is
     /// `<web_url>auth/google/callback`.
     pub google_client_id: String,
 }

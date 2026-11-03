@@ -254,6 +254,15 @@ fn google_id_tokens_are_checked() {
 }
 
 #[test]
+fn the_google_client_id_comes_from_the_setting_or_the_environment() {
+    assert_eq!(google::client_id("", " abc.apps.googleusercontent.com\n").as_deref(), Some("abc.apps.googleusercontent.com"));
+    assert_eq!(google::client_id("set.apps.googleusercontent.com", "env").as_deref(), Some("set.apps.googleusercontent.com"));
+    assert_eq!(google::client_id("", ""), None);
+    assert_eq!(google::client_id("", "two words"), None);
+    assert_eq!(google::client_id("", &"x".repeat(300)), None);
+}
+
+#[test]
 fn google_takes_over_an_unverified_email() {
     let dir = TempDir::new("acc-google");
     let c = ctx(&dir, true);
