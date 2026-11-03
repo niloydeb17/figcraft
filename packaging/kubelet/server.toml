@@ -2,11 +2,12 @@ listen = "0.0.0.0:47900"
 data = "/data"
 public_url = "wss://figcraft.kubelet.cloud/"
 
-# Figma-style cloud files: Share > Start sharing works without the server key, files are kept until
-# removed, and every shared file is listed under Home > Online in the desktop app and the browser.
+# Figma-style cloud files: Share > Start sharing works without the server key and files are kept
+# until removed. No team list (`team_files`): this host is public and the server has no accounts
+# yet, so a list would let anyone who reaches it open and edit every shared file. Turn it back on
+# once sign-in lands (docs/accounts-design.md).
 open_publish = true
 idle_days = 0
-team_files = "edit"
 web_url = "https://figcraft.kubelet.cloud/"
 max_file_mb = 64
 
