@@ -204,12 +204,12 @@ fn a_layers_row_that_takes_no_drop_shows_not_allowed() {
 fn every_cursor_has_the_kits_art_turned_to_its_angle() {
     use crate::cursors::{kit, kit_icon};
     use Shown::System;
-    let turn = |shown: Shown, cursor: Option<Cursor>| kit(shown, cursor).map(|(_, t)| t);
+    let turn = |shown: Shown, cursor: Option<Cursor>| kit(shown, cursor, false).map(|(_, t)| t);
     for t in ToolId::ALL {
-        assert!(kit(of(t.cursor()), Some(t.cursor())).is_some(), "{t:?}");
+        assert!(kit(of(t.cursor()), Some(t.cursor()), false).is_some(), "{t:?}");
     }
     for c in [Cursor::Move, Cursor::Grabbing, Cursor::Copy, Cursor::Pointer, Cursor::NotAllowed, Cursor::Pen(PenCursor::Bend)] {
-        assert!(kit(of(c), Some(c)).is_some(), "{c:?}");
+        assert!(kit(of(c), Some(c), false).is_some(), "{c:?}");
     }
     for i in [CursorIcon::ZoomIn, CursorIcon::ZoomOut, CursorIcon::ResizeNeSw, CursorIcon::Text] {
         assert!(kit_icon(i).is_some(), "{i:?}");
@@ -218,6 +218,11 @@ fn every_cursor_has_the_kits_art_turned_to_its_angle() {
     assert_eq!(turn(of(Cursor::Resize(30.0)), Some(Cursor::Resize(30.0))), Some(30.0));
     assert_eq!(turn(of(Cursor::Resize(-30.0)), Some(Cursor::Resize(-30.0))), Some(150.0));
     assert_eq!(turn(System(CursorIcon::ResizeVertical), None), Some(90.0));
+    // With the Scale tool (K) a handle shows the scale arrows, turned the same way.
+    let resize = Cursor::Resize(90.0);
+    let (art, turned) = kit(of(resize), Some(resize), true).unwrap();
+    assert!(!std::ptr::eq(art, kit(of(resize), Some(resize), false).unwrap().0), "not the plain arrows");
+    assert_eq!(turned, 90.0);
     // The kit's rotate arrows sit round a top right corner.
     assert_eq!(turn(of(Cursor::Rotate(-45.0)), None), Some(360.0));
     assert_eq!(turn(of(Cursor::Rotate(45.0)), None), Some(90.0));

@@ -335,7 +335,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, cursor);
         if app.canvas.figma_cursors {
             let engine = (!panning && app.canvas.zoom_tool.is_none()).then_some(cursor);
-            crate::cursors::show_kit(&ctx, at, shown, engine);
+            let scale = app.session.tool.tool == figcraft_engine::ToolId::Scale;
+            crate::cursors::show_kit(&ctx, at, shown, engine, scale);
         } else {
             shown.show(&ctx, at);
         }

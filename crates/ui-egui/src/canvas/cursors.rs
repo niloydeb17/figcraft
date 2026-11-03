@@ -157,10 +157,12 @@ pub(crate) fn kit_icon(icon: CursorIcon) -> Option<(&'static FigCursor, f32)> {
     })
 }
 
-/// The kit's cursor for what shows; `cursor` is the engine's, for a resize's exact angle.
-pub(crate) fn kit(shown: Shown, cursor: Option<Cursor>) -> Option<(&'static FigCursor, f32)> {
+/// The kit's cursor for what shows; `cursor` is the engine's, for a resize's exact angle. With the
+/// Scale tool (`scale`) a resize shows the scale arrows.
+pub(crate) fn kit(shown: Shown, cursor: Option<Cursor>, scale: bool) -> Option<(&'static FigCursor, f32)> {
+    let resize = if scale { &figma::RESIZE_SCALE } else { &figma::RESIZE };
     match (shown, cursor) {
-        (Shown::System(_), Some(Cursor::Resize(a))) if a.is_finite() => Some((&figma::RESIZE, a.rem_euclid(180.0) as f32)),
+        (Shown::System(_), Some(Cursor::Resize(a))) if a.is_finite() => Some((resize, a.rem_euclid(180.0) as f32)),
         (Shown::System(i), _) => kit_icon(i),
         // The kit's rotate arrows sit round a top right corner (-45°).
         (Shown::Drawn(Glyph::Rotate(a)), _) => Some((&figma::ROTATE, a + 45.0)),
@@ -180,8 +182,8 @@ pub(crate) fn kit(shown: Shown, cursor: Option<Cursor>) -> Option<(&'static FigC
 
 /// Show the kit's cursor for `shown` at `at` (the system's hidden), or `shown` itself where the kit
 /// has none.
-pub fn show_kit(ctx: &egui::Context, at: Pos2, shown: Shown, cursor: Option<Cursor>) {
-    match kit(shown, cursor) {
+pub fn show_kit(ctx: &egui::Context, at: Pos2, shown: Shown, cursor: Option<Cursor>, scale: bool) {
+    match kit(shown, cursor, scale) {
         Some((c, turn)) => {
             ctx.set_cursor_icon(CursorIcon::None);
             paint_kit(&layer(ctx), at, c, turn);
