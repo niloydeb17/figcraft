@@ -314,11 +314,70 @@ fn mode_anim(app: &FigApp, ctx: &egui::Context, dev: bool) -> (f32, f32) {
     mode_progress(ctx.animate_bool_with_time(egui::Id::unique("toolbar_dev"), dev, time))
 }
 
-/// How far the switch to Draw mode has got, as [`mode_anim`]'s (the design row slides down out
-/// of the pill as the Draw row comes in from above, the pill following).
+/// A switch into or out of Draw mode: which way, when, and where it started from (the rows'
+/// slide and the pill's growth, each 0 for the design toolbar and 1 for the Draw one).
+#[derive(Clone, Copy, Debug)]
+struct DrawSwitch {
+    on: bool,
+    at: f64,
+    from: (f32, f32),
+}
+
+/// As UI3's toolbar: the rows slide over 0.3 s, the pill's width follows from 0.2 s on over
+/// 0.5 s, each with CSS's `ease`; the same order both ways.
+const DRAW_SLIDE_SECS: f32 = 0.3;
+const DRAW_GROW_DELAY: f32 = 0.2;
+const DRAW_GROW_SECS: f32 = 0.5;
+
+/// CSS's `ease` (cubic-bezier(0.25, 0.1, 0.25, 1)) at `x` (0..1).
+fn css_ease(x: f32) -> f32 {
+    let x = if x.is_nan() { 1.0 } else { x.clamp(0.0, 1.0) };
+    if x == 0.0 || x == 1.0 {
+        return x;
+    }
+    let bezier = |t: f32, a: f32, b: f32| 3.0 * (1.0 - t) * (1.0 - t) * t * a + 3.0 * (1.0 - t) * t * t * b + t * t * t;
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if bezier(mid, 0.25, 0.25) < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    bezier(0.5 * (lo + hi), 0.1, 1.0)
+}
+
+/// Switch `s`'s (slide, growth) `t` seconds after it began.
+fn draw_progress(s: DrawSwitch, t: f64) -> (f32, f32) {
+    let to = if s.on { 1.0 } else { 0.0 };
+    let t = t as f32;
+    let slide = s.from.0 + (to - s.from.0) * css_ease(t / DRAW_SLIDE_SECS);
+    let grow = s.from.1 + (to - s.from.1) * css_ease((t - DRAW_GROW_DELAY) / DRAW_GROW_SECS);
+    (slide, grow)
+}
+
+/// How far the switch to Draw mode has got, as (the rows' slide, the pill's growth): the Draw
+/// row rises into the pill as the design row leaves through its top, the pill following.
 fn draw_anim(app: &FigApp, ctx: &egui::Context, draw: bool) -> (f32, f32) {
-    let time = if app.reduce_motion() { 0.0 } else { 0.66 };
-    mode_progress(ctx.animate_bool_with_time(egui::Id::unique("toolbar_draw"), draw, time))
+    let id = egui::Id::unique("toolbar_draw");
+    let now = ctx.input(|i| i.time);
+    let end = if draw { 1.0 } else { 0.0 };
+    let s = match ctx.data(|d| d.get_temp::<DrawSwitch>(id)) {
+        // Turned around (or turned again mid-way): from wherever it is now.
+        Some(s) if s.on != draw => DrawSwitch { on: draw, at: now, from: draw_progress(s, now - s.at) },
+        Some(s) => s,
+        None => DrawSwitch { on: draw, at: f64::NEG_INFINITY, from: (end, end) },
+    };
+    ctx.data_mut(|d| d.insert_temp(id, s));
+    if app.reduce_motion() {
+        return (end, end);
+    }
+    let p = draw_progress(s, now - s.at);
+    if p != (end, end) {
+        ctx.request_repaint();
+    }
+    p
 }
 
 /// The slide and the growth at `u` (0..1, the switch's linear progress): the rows slide over the
@@ -373,7 +432,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         // The row on its way out first, so the one coming in has the last word (the Actions
         // button's place); each where its slide puts it.
         let design_row = |app: &mut FigApp, ui: &mut Ui| {
-            let y = row_y + dslide * PILL_H;
+            let y = row_y - dslide * PILL_H;
             let mut x = start;
             for g in groups {
                 x = group_cell(app, ui, g, pos2(x, y), rect.min.y, t);
@@ -382,7 +441,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         };
         // Its own ids: both rows are on screen while they swap.
         let draw_tools = |app: &mut FigApp, ui: &mut Ui| {
-            let y = row_y + (dslide - 1.0) * PILL_H;
+            let y = row_y + (1.0 - dslide) * PILL_H;
             ui.push_id("draw_row", |ui| {
                 let x = draw_row(app, ui, start, y, rect, outer_clip, t);
                 actions_button(app, ui, x, y, t)
@@ -656,18 +715,21 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
     };
     let seg = Rect::from_min_size(pos2(x, cy - TOOL_CELL / 2.0), vec2(MODE_W, TOOL_CELL));
     ui.painter().rect_filled(seg, CornerRadius::same(5), t.field);
+    let cell =
+        |i: f32| Rect::from_min_size(pos2(seg.min.x + MODE_INSET + i * (MODE_CELL + MODE_INSET), seg.min.y + MODE_INSET), vec2(MODE_CELL, MODE_CELL));
+    // The current mode lifts off the field: a white cell with a soft drop, gliding to a new mode.
+    let glide = if app.reduce_motion() { 0.0 } else { 0.08 };
+    let at = ui.ctx().animate_value_with_time(egui::Id::unique("toolbar_mode_highlight"), active as f32, glide);
+    let lifted = cell(at);
+    let radius = CornerRadius::same(3);
+    ui.painter().add(egui::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(38) }.as_shape(lifted, radius));
+    ui.painter().rect_filled(lifted, radius, t.panel);
+    ui.painter().rect_stroke(lifted, radius, Stroke::new(0.5, Color32::from_black_alpha(30)), StrokeKind::Outside);
     for (i, (icon, tip)) in modes.iter().enumerate() {
-        let left = seg.min.x + MODE_INSET + i as f32 * (MODE_CELL + MODE_INSET);
-        let r = Rect::from_min_size(pos2(left, seg.min.y + MODE_INSET), vec2(MODE_CELL, MODE_CELL));
+        let r = cell(i as f32);
         let resp = ui.interact(r, ui.scope_id().with(("mode", i)), Sense::click()).on_hover_text(*tip);
         a11y::toggle(&resp, tip, i == active);
-        if i == active {
-            // The current mode lifts off the field: a white cell with a soft drop.
-            let radius = CornerRadius::same(3);
-            ui.painter().add(egui::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(38) }.as_shape(r, radius));
-            ui.painter().rect_filled(r, radius, t.panel);
-            ui.painter().rect_stroke(r, radius, Stroke::new(0.5, Color32::from_black_alpha(30)), StrokeKind::Outside);
-        } else if resp.hovered() {
+        if i != active && resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(3), t.hover);
         }
         icons::paint(
@@ -1143,6 +1205,34 @@ mod tests {
     fn the_draw_pill_is_on_the_ui3_grid() {
         assert_eq!(draw_width(), 625.0);
         assert_eq!(DRAW_TOOLS.len(), 3);
+    }
+
+    /// The switch to and from Draw mode keeps UI3's timing: CSS's `ease`, the rows over 0.3 s,
+    /// the pill from 0.2 s over 0.5 s, the rows first both ways; turned around mid-way, it goes
+    /// back from where it is.
+    #[test]
+    fn the_draw_switch_keeps_ui3s_timing() {
+        let close = |a: f32, b: f32| (a - b).abs() < 2e-3;
+        // cubic-bezier(0.25, 0.1, 0.25, 1)'s known values.
+        assert!(close(css_ease(0.0), 0.0) && close(css_ease(1.0), 1.0));
+        assert!(close(css_ease(0.5), 0.8024), "{}", css_ease(0.5));
+        assert!(close(css_ease(0.25), 0.4094), "{}", css_ease(0.25));
+        assert_eq!(css_ease(f32::NAN), 1.0);
+        let on = DrawSwitch { on: true, at: 0.0, from: (0.0, 0.0) };
+        assert_eq!(draw_progress(on, 0.0), (0.0, 0.0));
+        let (slide, grow) = draw_progress(on, 0.15);
+        assert!(close(slide, 0.8024) && grow == 0.0, "the rows first: {slide} {grow}");
+        let (slide, grow) = draw_progress(on, 0.3);
+        assert!(slide == 1.0 && grow > 0.0 && grow < 0.5, "the pill under way: {grow}");
+        assert_eq!(draw_progress(on, 0.7), (1.0, 1.0));
+        let off = DrawSwitch { on: false, at: 0.0, from: (1.0, 1.0) };
+        let (slide, grow) = draw_progress(off, 0.15);
+        assert!(slide < 0.25 && grow == 1.0, "back: the rows first again: {slide} {grow}");
+        assert_eq!(draw_progress(off, 0.7), (0.0, 0.0));
+        // Turned around half-way: from there, not from the end.
+        let back = DrawSwitch { on: false, at: 0.0, from: draw_progress(on, 0.15) };
+        assert_eq!(draw_progress(back, 0.0), draw_progress(on, 0.15));
+        assert_eq!(draw_progress(back, f64::INFINITY), (0.0, 0.0));
     }
 
     /// The switcher's first segment opens Draw mode (its toolbar and header) and the others leave
