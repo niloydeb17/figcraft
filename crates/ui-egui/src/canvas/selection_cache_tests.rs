@@ -15,6 +15,9 @@ use crate::theme::{Tokens, set_canvas_page};
 use crate::{FigApp, NoServices};
 use figcraft_engine::tools::{PointerEvent, PointerKind};
 
+/// A page about as blue as the selection, where overlays take the darker blue.
+const BLUE_PAGE: Color32 = Color32::from_rgb(0x18, 0xA0, 0xFB);
+
 fn id(v: Value) -> NodeId {
     NodeId(v["id"].as_u64().unwrap())
 }
@@ -93,15 +96,15 @@ fn every_input_the_geometry_shows_makes_it_again() {
         ("zoom", Box::new(|app: &mut FigApp, _: &Context| app.session.ds_mut().unwrap().view.zoom *= 2.0)),
         ("pan", Box::new(|app: &mut FigApp, _: &Context| app.session.ds_mut().unwrap().view.cx += 30.0)),
         ("the canvas moving", Box::new(|app: &mut FigApp, _: &Context| app.canvas.rect = app.canvas.rect.translate(vec2(40.0, 0.0)))),
-        ("the theme", Box::new(|_: &mut FigApp, ctx: &Context| set_canvas_page(ctx, Color32::BLACK))),
+        ("the theme", Box::new(|_: &mut FigApp, ctx: &Context| set_canvas_page(ctx, BLUE_PAGE))),
     ];
     let mut page = Color32::WHITE;
     for (what, change) in changes {
         let before = geometry(&app, &ctx);
         change(&mut app, &ctx);
         if what == "the theme" {
-            page = Color32::BLACK;
-            assert_ne!(crate::theme::canvas_accent(&ctx), before.col, "a dark page takes the other green");
+            page = BLUE_PAGE;
+            assert_ne!(crate::theme::canvas_accent(&ctx), before.col, "a blue page takes the darker blue");
         }
         let after = geometry(&app, &ctx);
         assert!(!kept(&before, &after), "{what}");

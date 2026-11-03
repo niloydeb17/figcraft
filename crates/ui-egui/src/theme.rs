@@ -47,20 +47,20 @@ pub struct Tokens {
     pub focus: Color32,
 }
 
-/// FigCraft's brand green for solid surfaces.
-pub const BRAND: Color32 = Color32::from_rgb(0x02, 0xDA, 0x96);
-/// Contrast-safe green for thin selection outlines and white-on-green labels.
-/// It reaches 4.5:1 on white and 3:1 on the dark canvas.
-pub const ACCENT: Color32 = Color32::from_rgb(0x00, 0x87, 0x5F);
-/// Ink on the bright green brand surface (white would not have enough contrast).
-pub const ACCENT_ON: Color32 = Color32::from_rgb(0x07, 0x35, 0x2A);
-/// Id of the canvas overlays' green for this frame ([`set_canvas_page`]).
+/// The selection blue (UI3's brand background): selection outlines, handles, solid accents.
+pub const BRAND: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
+/// The darker blue (UI3's brand hover and brand text): white labels and outlines on pages the
+/// bright one sinks into.
+pub const ACCENT: Color32 = Color32::from_rgb(0x00, 0x7B, 0xE5);
+/// Ink on the blue (UI3's text on brand).
+pub const ACCENT_ON: Color32 = Color32::WHITE;
+/// Id of the canvas overlays' blue for this frame ([`set_canvas_page`]).
 const CANVAS_ACCENT: &str = "figcraft-canvas-accent";
 
-/// Remember the page colour the canvas shows. Its overlays (outlines, handles, arrows) take
-/// whichever green contrasts more with it: the bright one on a dark page, the darker on a light one.
+/// Remember the page colour the canvas shows. Its overlays (outlines, handles, arrows) are the
+/// selection blue, as in UI3, unless it sinks into the page (a blue page): then the darker blue.
 pub fn set_canvas_page(ctx: &Context, page: Color32) {
-    let pick = if c(BRAND).contrast(c(page)) > c(ACCENT).contrast(c(page)) { BRAND } else { ACCENT };
+    let pick = if c(BRAND).contrast(c(page)) >= 2.0 { BRAND } else { ACCENT };
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique(CANVAS_ACCENT), pick));
 }
 
@@ -69,12 +69,12 @@ fn c(x: Color32) -> figcraft_color::Color {
     figcraft_color::Color::new(f32::from(x.r()) / 255.0, f32::from(x.g()) / 255.0, f32::from(x.b()) / 255.0, 1.0)
 }
 
-/// The green for overlays drawn on the page ([`set_canvas_page`]); [`ACCENT`] before a page shows.
+/// The blue for overlays drawn on the page ([`set_canvas_page`]); [`BRAND`] before a page shows.
 pub fn canvas_accent(ctx: &Context) -> Color32 {
-    ctx.data(|d| d.get_temp(egui::Id::unique(CANVAS_ACCENT))).unwrap_or(ACCENT)
+    ctx.data(|d| d.get_temp(egui::Id::unique(CANVAS_ACCENT))).unwrap_or(BRAND)
 }
 
-/// A fill under white text: the darker green stands in for the bright one.
+/// A fill under white text: the darker blue stands in for the bright one.
 pub fn under_white(c: Color32) -> Color32 {
     if c == BRAND { ACCENT } else { c }
 }
@@ -109,12 +109,12 @@ impl Tokens {
             field: Color32::from_rgb(0xF5, 0xF5, 0xF5),
             field_hover_border: Color32::from_rgb(0xE6, 0xE6, 0xE6),
             accent: BRAND,
-            accent_hover: Color32::from_rgb(0x00, 0xAD, 0x78),
+            accent_hover: ACCENT,
             accent_on: ACCENT_ON,
-            // Darker green keeps links and labels legible on white and selected rows.
-            accent_text: Color32::from_rgb(0x00, 0x7A, 0x56),
-            selected_row: Color32::from_rgb(0xE0, 0xFB, 0xF1),
-            selected_row_child: Color32::from_rgb(0xF1, 0xFC, 0xF7),
+            // The darker blue keeps links and labels legible on white and selected rows.
+            accent_text: ACCENT,
+            selected_row: Color32::from_rgb(0xE5, 0xF4, 0xFF),
+            selected_row_child: Color32::from_rgb(0xF2, 0xF9, 0xFF),
             component: COMPONENT,
             component_row: Color32::from_rgb(0xF1, 0xE9, 0xFF),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
@@ -126,9 +126,9 @@ impl Tokens {
             shadow: Color32::from_black_alpha(40),
             menu: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             menu_text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            menu_hover: ACCENT,
+            menu_hover: BRAND,
             menu_dim: Color32::from_rgb(0x9A, 0x9A, 0x9A),
-            focus: Color32::from_rgb(0x00, 0x7A, 0x56),
+            focus: ACCENT,
         }
     }
 
@@ -142,7 +142,8 @@ impl Tokens {
             border_strong: Color32::from_rgb(0x55, 0x55, 0x55),
             text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             text_secondary: Color32::from_rgb(0xB3, 0xB3, 0xB3),
-            text_tertiary: Color32::from_rgb(0x88, 0x88, 0x88),
+            // 3:1 on the selected row too.
+            text_tertiary: Color32::from_rgb(0x90, 0x90, 0x90),
             icon: Color32::from_rgb(0xF5, 0xF5, 0xF5),
             icon_secondary: Color32::from_rgb(0xB3, 0xB3, 0xB3),
             hover: Color32::from_rgb(0x38, 0x38, 0x38),
@@ -150,11 +151,11 @@ impl Tokens {
             field: Color32::from_rgb(0x38, 0x38, 0x38),
             field_hover_border: Color32::from_rgb(0x4D, 0x4D, 0x4D),
             accent: BRAND,
-            accent_hover: Color32::from_rgb(0x52, 0xE9, 0xB7),
+            accent_hover: ACCENT,
             accent_on: ACCENT_ON,
-            accent_text: Color32::from_rgb(0x52, 0xE9, 0xB7),
-            selected_row: Color32::from_rgb(0x16, 0x42, 0x36),
-            selected_row_child: Color32::from_rgb(0x12, 0x37, 0x2D),
+            accent_text: Color32::from_rgb(0x80, 0xCA, 0xFF),
+            selected_row: Color32::from_rgb(0x39, 0x43, 0x60),
+            selected_row_child: Color32::from_rgb(0x32, 0x39, 0x4D),
             component: Color32::from_rgb(0xD2, 0x7C, 0xFF),
             component_row: Color32::from_rgb(0x3E, 0x30, 0x52),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
@@ -166,7 +167,7 @@ impl Tokens {
             shadow: Color32::from_black_alpha(90),
             menu: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             menu_text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-            menu_hover: ACCENT,
+            menu_hover: BRAND,
             menu_dim: Color32::from_rgb(0x9A, 0x9A, 0x9A),
             focus: BRAND,
         }
@@ -226,9 +227,9 @@ fn visuals(t: Tokens) -> Visuals {
     v.window_stroke = Stroke::new(1.0, t.border);
     v.window_corner_radius = egui::CornerRadius::same(13);
     v.menu_corner_radius = egui::CornerRadius::same(13);
-    v.selection.bg_fill = t.accent.gamma_multiply(0.3);
+    v.selection.bg_fill = t.accent.gamma_multiply(0.2);
     // Also the colour of selected text on that highlight (and a focused text box's outline): the
-    // theme's readable green, not the darker one that sinks into the dark theme's highlight.
+    // theme's readable blue, not the darker one that sinks into the dark theme's highlight.
     v.selection.stroke = Stroke::new(1.0, t.accent_text);
     v.hyperlink_color = t.accent_text;
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open, &mut v.widgets.noninteractive] {
@@ -466,16 +467,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canvas_overlays_take_the_green_that_stands_out_on_the_page() {
+    fn canvas_overlays_take_the_selection_blue_unless_the_page_is_blue() {
         let ctx = Context::default();
-        assert_eq!(canvas_accent(&ctx), ACCENT, "before any page shows");
-        set_canvas_page(&ctx, Color32::from_rgb(0x1E, 0x1E, 0x1E));
-        assert_eq!(canvas_accent(&ctx), BRAND, "the bright green on a dark page");
-        set_canvas_page(&ctx, Color32::WHITE);
-        assert_eq!(canvas_accent(&ctx), ACCENT, "the darker green on a light page");
-        set_canvas_page(&ctx, Color32::from_rgb(0xF5, 0xF5, 0xF5));
-        assert_eq!(canvas_accent(&ctx), ACCENT);
-        // White text never sits on the bright green.
+        assert_eq!(canvas_accent(&ctx), BRAND, "before any page shows");
+        for page in [Color32::from_rgb(0x1E, 0x1E, 0x1E), Color32::WHITE, Color32::from_rgb(0xF5, 0xF5, 0xF5)] {
+            set_canvas_page(&ctx, page);
+            assert_eq!(canvas_accent(&ctx), BRAND, "UI3's blue on {page:?}");
+        }
+        set_canvas_page(&ctx, Color32::from_rgb(0x18, 0xA0, 0xFB));
+        assert_eq!(canvas_accent(&ctx), ACCENT, "the darker blue on a page of about the same blue");
+        // White text never sits on the bright blue.
         assert_eq!(under_white(BRAND), ACCENT);
         assert_eq!(under_white(COMPONENT), COMPONENT);
     }
