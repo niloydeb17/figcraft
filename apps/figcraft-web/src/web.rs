@@ -62,8 +62,9 @@ pub fn start() {
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
                     fig.note_recovered(recovered);
-                    // The UI3 kit's cursors over the canvas.
+                    // The UI3 kit's cursors over the canvas, and its eased zooms.
                     fig.canvas.figma_cursors = true;
+                    fig.canvas.smooth_zoom = true;
                     if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
                         log::error!("couldn't listen for pasted images: {e:?}");
                     }

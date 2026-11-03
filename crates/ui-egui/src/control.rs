@@ -1420,6 +1420,8 @@ fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) ->
 
 /// Handle one control method (also used by tests and the headless snapshot tool).
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
+    // A script's view changes land at once (no zoom easing to wait for before a screenshot).
+    app.canvas.view_direct = true;
     if !DOCUMENT_METHODS.contains(&method) {
         front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
     }

@@ -20,6 +20,7 @@ mod outline;
 mod overlays;
 mod render;
 mod rulers;
+mod view_tween;
 
 #[cfg(test)]
 use builder::clean_poly;
@@ -87,6 +88,15 @@ pub struct CanvasState {
     /// Where the pointer is over the canvas while something on it has a cursor of its own: the
     /// frame's cursor is drawn as the kit's there once the frame ends.
     pub(crate) restyle_at: Option<Pos2>,
+    /// Ease discrete zooms (zoom in and out, to fit, to the selection) as UI3 does
+    /// ([`view_tween`]); the desktop and web apps turn it on, headless harnesses keep views exact.
+    pub smooth_zoom: bool,
+    /// The view moved under the pointer's or a script's own hand this pass (wheel, pinch, scroll,
+    /// pan, the control channel): it isn't eased.
+    pub(crate) view_direct: bool,
+    tween: Option<view_tween::Tween>,
+    /// The file and page shown last pass and the look their view was left at.
+    last_view: Option<((u64, figcraft_doc::NodeId), view_tween::Look)>,
     preedit: Option<PreeditView>,
     /// The pen pressure last reported during the current press (pen and stylus touches; the
     /// winit backends and browsers that report it).
@@ -115,6 +125,10 @@ impl Default for CanvasState {
             cursor: None,
             figma_cursors: false,
             restyle_at: None,
+            smooth_zoom: false,
+            view_direct: false,
+            tween: None,
+            last_view: None,
             zoom_tool: None,
             zoom_drag: None,
             last_pointer: None,
@@ -219,7 +233,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         ds.view.vh = f64::from(rect.height());
         if first {
             ds.zoom_to_fit();
+            app.canvas.view_direct = true;
         }
+    }
+    if view_tween::step(app, ctx.input(|i| i.time)) {
+        ctx.request_repaint();
     }
     let own_cursor = input(app, ui, &resp);
     // A browser names no dragged file until the drop, so documents there still say "import", or
@@ -408,6 +426,9 @@ mod selection_cache_tests;
 
 #[cfg(test)]
 mod wheel_zoom_tests;
+
+#[cfg(test)]
+mod view_tween_tests;
 
 #[cfg(test)]
 mod zoom_preview_tests;

@@ -201,11 +201,13 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
                 ds.view.set_zoom_at(z, (anchor.x, anchor.y));
                 ds.revision += 1;
             }
+            app.canvas.view_direct = true;
         } else if scroll != egui::Vec2::ZERO
             && let Ok(ds) = app.session.ds_mut()
         {
             ds.view.scroll(f64::from(scroll.x), f64::from(scroll.y), mods.shift);
             ds.revision += 1;
+            app.canvas.view_direct = true;
         }
     }
     if zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) {
@@ -224,6 +226,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
                     ds.revision += 1;
                 }
             }
+            app.canvas.view_direct = true;
         }
         if !middle_down && !ctx.input(|i| i.pointer.primary_down()) {
             app.canvas.middle_pan = None;
