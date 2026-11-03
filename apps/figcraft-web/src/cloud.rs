@@ -34,43 +34,48 @@ impl Cloud {
         fig.run("collab.join", json!({"link": target}));
     }
 
-    /// Once a frame.
-    pub fn tick(&mut self, fig: &mut FigApp) {
+    /// Once a frame. egui draws only when something happens: while a file waits to go to the
+    /// server, ask for another frame so it goes even if the pointer stays still.
+    pub fn tick(&mut self, fig: &mut FigApp, ctx: &egui::Context) {
         self.follow_address(fig);
-        self.keep(fig, js_sys::Date::now());
+        if self.keep(fig, js_sys::Date::now()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
     }
 
-    /// Put the open file on the server once it has changes and is still for a moment.
-    fn keep(&mut self, fig: &mut FigApp, now: f64) {
+    /// Put the open file on the server once it has changes and is still for a moment. True while
+    /// it waits for that moment.
+    fn keep(&mut self, fig: &mut FigApp, now: f64) -> bool {
         let s = &fig.session;
         if fig.ui.home || s.prefs.publish_server.trim().is_empty() || !s.live.available() {
-            return;
+            return false;
         }
-        let Some(d) = s.docs.get(s.active) else { return };
+        let Some(d) = s.docs.get(s.active) else { return false };
         let (uid, revision) = (d.uid, d.revision);
         if self.sent.contains(&uid) || d.branch_of.is_some() || !d.is_dirty() {
-            return;
+            return false;
         }
         // In a session already (one you joined, or one on its way): it's on a server.
         if s.live.iter().any(|l| l.doc_uid == Some(uid) || l.tab == Some(uid)) {
             self.sent.insert(uid);
-            return;
+            return false;
         }
         let busy = d.interaction.is_some() || d.text_edit.is_some();
         match self.still {
             Some((u, r, since)) if u == uid && r == revision && !busy => {
                 if now - since < SETTLE_MS {
-                    return;
+                    return true;
                 }
             }
             _ => {
                 self.still = Some((uid, revision, now));
-                return;
+                return true;
             }
         }
         self.sent.insert(uid);
         self.still = None;
         fig.run("collab.share", json!({}));
+        false
     }
 
     /// Point the page's address at the open file once it is on a server.

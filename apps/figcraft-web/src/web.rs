@@ -193,7 +193,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
-        self.cloud.tick(&mut self.fig);
+        self.cloud.tick(&mut self.fig, ui.ctx());
         set_page_title(&self.fig);
         crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,
