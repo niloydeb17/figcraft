@@ -23,6 +23,9 @@ services:
       dockerfile: packaging/server/Dockerfile
       args:
         SERVER_CONFIG: packaging/kubelet/server.toml
+    # Google sign-in's client secret, from Dokploy's environment for this compose (empty: off).
+    environment:
+      FIGCRAFT_GOOGLE_CLIENT_SECRET: ${FIGCRAFT_GOOGLE_CLIENT_SECRET:-}
     volumes:
       - figcraft-data:/data
 

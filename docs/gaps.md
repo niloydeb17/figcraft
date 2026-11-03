@@ -143,8 +143,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   proxy, and releases ship it with a deployment guide (`docs/server.md`); server message limits
   follow `max_file_mb`, so files above 64 MiB publish and open (#705), a damaged generation field
   no longer drops a log's flushed edits (#687), and the browser build joins from a `#join=` link
-  (#712: unit-tested, not run in a browser). But there are no accounts (a link is the access)
-  (`docs/collab-protocol.md`).
+  (#712: unit-tested, not run in a browser). Accounts have begun (2026-11-03): the server can
+  serve a sign-in page where people sign up and log in with an email and password (argon2id
+  hashes, session cookies that last 21 days unused) or with Google when a client is set up, and
+  the operator manages accounts with `figcraft-server users` (`docs/server.md#accounts`). But
+  files don't belong to accounts yet: a link is still the access, and the app doesn't know who is
+  signed in (`docs/collab-protocol.md`, `docs/accounts-design.md`).
 - **Impact:** Figma's defining feature; most teams use it every day. Solo designers can work
   without it.
 - **Estimate:** 42–84 h: accounts, teams and per-person permissions, shared comments and versions

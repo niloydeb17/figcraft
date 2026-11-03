@@ -34,6 +34,14 @@ toml = "1"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 # Stopping gracefully on SIGTERM/SIGINT/SIGHUP (systemd, Docker, Ctrl+C) and Ctrl+C/close on Windows.
 ctrlc = { version = "3", features = ["termination"] }
+# Accounts: password hashes (argon2id), the sign-in pages' requests and forms, random tokens, and
+# Google sign-in's token request.
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+httparse = "1"
+form_urlencoded = "1"
+getrandom = "0.4"
+base64 = { workspace = true }
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 # Free space on the data directory's disk (statvfs, without unsafe code of our own).
 [target.'cfg(unix)'.dependencies]

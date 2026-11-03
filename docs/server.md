@@ -324,6 +324,49 @@ otherwise it changes the directory itself. A new link is shown only when it is m
 keeps only a hash of its token, so a lost link can't be recovered (revoke it and make another).
 Publishing makes an edit link and a view link labelled `Published (edit)` and `Published (view)`.
 
+## Accounts
+
+The server can serve a sign-in page where people make an account and log in (the first step of
+[`accounts-design.md`](accounts-design.md); files don't belong to accounts yet, so share links
+are still what opens them). Turn it on with a port of its own and send these paths to it from the
+reverse proxy in front of the server: `/login`, `/login.css`, `/login-art.svg`, `/logout` and
+everything under `/auth/`.
+
+```toml
+accounts_listen = "0.0.0.0:47901"
+web_url = "https://figcraft.example.com/"   # where the proxy serves it: forms from other sites are refused
+signup = true                               # false: only `figcraft-server users add` makes accounts
+session_days = 21                           # a sign-in lasts this long unused
+operator_contact = "help@example.com"       # the page's "get in touch" link
+terms_url = ""                              # shown under the form when set
+```
+
+- **Signing in.** `/login` asks for an email and password. An email with no account makes one
+  (passwords of 8 to 256 characters); one with an account logs in. Passwords are kept as argon2id
+  hashes and sessions as hashes of their tokens, in `<data>/accounts/` (`users.json`,
+  `sessions.json`). The browser gets an HTTP-only, `SameSite=Lax` cookie (`Secure` when `web_url`
+  is `https://`). Ten wrong passwords in 15 minutes pause an account's sign-in for 15 minutes, and
+  the whole server makes at most 120 accounts an hour. `GET /auth/me` says who is signed in.
+- **Google.** Create an OAuth client (type *Web application*) in Google Cloud's console with the
+  redirect URI `<web_url>auth/google/callback`, set `google_client_id`, and give the server its
+  secret in the environment as `FIGCRAFT_GOOGLE_CLIENT_SECRET` (never in the settings file). The
+  page then shows **Continue with Google**. A Google sign-in whose verified email has an account
+  joins it, and that account's password is dropped (nobody checked that email when it was made).
+- **No email yet.** Nothing sends mail: emails aren't verified and there is no reset link. The
+  operator resets a password instead.
+
+```sh
+figcraft-server --config server.toml users                      # every account
+figcraft-server --config server.toml users add ada@example.com --name Ada   # prints its password
+figcraft-server --config server.toml users reset-password ada@example.com   # prints a new one; signs it out
+figcraft-server --config server.toml users disable ada@example.com          # or enable; disable signs it out
+figcraft-server --config server.toml users remove ada@example.com
+```
+
+With a server running on the directory they ask it on `accounts_listen` from this machine, with
+the server key; otherwise they change `<data>/accounts/` themselves. Back up `accounts/` with the
+rest of the data directory.
+
 ## Configuration
 
 Every flag is also a key of a TOML file given with `--config server.toml` (flags win; unknown keys

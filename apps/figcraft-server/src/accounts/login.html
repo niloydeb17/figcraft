@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="referrer" content="same-origin">
+  <title>{{title}}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23bdff00'/%3E%3Cpath d='M13 36V12h24v7H20v4h13v7H20v6Z' fill='%23403800'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body>
+  <main class="login">
+    <section class="login-panel">
+      <svg class="login-blob" viewBox="0 0 150 110" aria-hidden="true" preserveAspectRatio="xMinYMin slice">
+        <defs>
+          <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#2a1a8a"/><circle cx="3" cy="3" r="1.6" fill="#fff" opacity=".9"/></pattern>
+        </defs>
+        <g fill="url(#dots)" stroke="#4db8ff" stroke-width="2.4" stroke-linejoin="round">
+          <path d="M0 0H92L98 8 90 14 80 12 74 24 60 28 52 40 38 36 30 26 12 22 6 12 0 14Z"/>
+          <path d="M0 52 12 50 26 58 30 72 20 80 6 76 0 80Z"/>
+        </g>
+      </svg>
+
+      <nav class="login-nav" aria-label="Site">
+        <a href="/">Open FigCraft</a>
+        <a href="https://github.com/storytold/figcraft/tree/main/docs" target="_blank" rel="noopener noreferrer">Docs</a>
+        <a href="https://github.com/storytold/figcraft" target="_blank" rel="noopener noreferrer">Open source</a>
+      </nav>
+
+      <div class="login-card">
+        <a class="login-logo" href="/" aria-label="FigCraft">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="11" fill="#bdff00"/><path d="M13 36V12h24v7H20v4h13v7H20v6Z" fill="#403800"/></svg>
+        </a>
+{{card}}
+      </div>
+
+      <p class="login-help"><b>Need help with your account?</b><span>No worries: <a href="{{help}}" target="_blank" rel="noopener noreferrer">get in touch</a> and we'll sort it out for you.</span></p>
+    </section>
+
+    <aside class="login-art" aria-hidden="true"></aside>
+  </main>
+</body>
+</html>

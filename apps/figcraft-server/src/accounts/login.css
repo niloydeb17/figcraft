@@ -1,0 +1,53 @@
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:Inter,"Helvetica Neue",Arial,sans-serif;color:#111;background:#fff;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.login{display:grid;grid-template-columns:1fr 1fr;min-height:100vh}
+.login-panel{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:96px 32px 120px;overflow:hidden}
+.login-blob{position:absolute;left:0;top:0;width:clamp(130px,14vw,260px);height:auto;pointer-events:none}
+.login-nav{position:absolute;top:18px;right:28px;display:flex;gap:22px;font-size:11px;font-weight:600;color:#333}
+.login-nav a{text-decoration:none;padding:4px 2px;border-radius:2px;transition:background-color .1s cubic-bezier(.25,.46,.45,.94)}
+.login-nav a:hover{background:#0000000f}
+.login-card{width:100%;max-width:390px;display:flex;flex-direction:column;align-items:stretch;animation:login-in .6s cubic-bezier(.22,.61,.36,1) both}
+.login-logo{align-self:center;display:block;width:44px;height:44px;margin-bottom:22px}
+.login-logo svg{width:100%;height:100%;display:block}
+h1{margin:0;text-align:center;font-size:34px;line-height:1.05;font-weight:500;letter-spacing:-1.4px}
+.login-sub{margin:12px 0 26px;text-align:center;font-size:13px;color:#555}
+.google-button{display:flex;align-items:center;justify-content:center;gap:9px;height:42px;border:1px solid #d6d6d6;border-radius:3px;font-size:13px;font-weight:600;text-decoration:none;background:#fff;transition:background-color .15s cubic-bezier(.25,.46,.45,.94)}
+.google-button:hover{background:#f4f4f4}
+.google-button svg{width:16px;height:16px}
+form{display:flex;flex-direction:column;margin-top:18px}
+label{font-size:12px;font-weight:700;margin:0 0 6px}
+input{height:42px;border:1px solid #d6d6d6;border-radius:3px;padding:0 12px;font:inherit;font-size:13px;margin-bottom:14px;background:#fff;color:#111}
+input::placeholder{color:#9a9a9a}
+input:focus-visible{outline:2px solid #99edff;outline-offset:1px;border-color:#111}
+button{height:44px;margin-top:6px;border:0;border-radius:3px;background:#111;color:#fff;font:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:background-color .2s cubic-bezier(.25,.46,.45,.94)}
+button:hover{background:#333}
+button:focus-visible,.google-button:focus-visible,a:focus-visible{outline:3px solid #99edff;outline-offset:2px}
+.login-legal{margin:22px 0 0;font-size:11px;line-height:1.5;color:#666}
+.login-legal a{color:#111}
+.login-help{position:absolute;bottom:30px;left:0;right:0;margin:0;padding:0 24px;text-align:center;font-size:11px;line-height:1.5;color:#666;display:flex;flex-direction:column;gap:2px}
+.login-help b{color:#111}
+.login-art{position:relative;min-height:100vh;overflow:hidden}
+.login-art svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+@keyframes login-in{from{opacity:0;translate:0 10px}to{opacity:1;translate:0 0}}
+@media (max-width:860px){
+  .login{grid-template-columns:1fr}
+  .login-art{display:none}
+  .login-nav{display:none}
+  .login-panel{min-height:100vh;padding:72px 24px 120px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.login-art{background:#cfc3ef url("login-art.svg") center/cover no-repeat}
+.login-error{margin:0 0 14px;padding:10px 12px;border-radius:3px;background:#fdecec;color:#8a1c1c;font-size:12px;line-height:1.45}
+.login-note{margin:0 0 14px;font-size:12px;line-height:1.45;color:#555}
+.login-or{display:flex;align-items:center;gap:10px;margin:18px 0 0;font-size:11px;color:#888}
+.login-or::before,.login-or::after{content:"";flex:1;height:1px;background:#e6e6e6}
+.login-account{margin:0 0 22px;text-align:center;font-size:13px;color:#555}
+.login-account b{display:block;color:#111;font-size:14px;margin-bottom:2px}
+.login-open{display:flex;align-items:center;justify-content:center;height:44px;border-radius:3px;background:#111;color:#fff;font-size:14px;font-weight:600;text-decoration:none}
+.login-open:hover{background:#333}
+.login-out{margin-top:10px}
+.login-out button{width:100%;background:#fff;color:#111;border:1px solid #d6d6d6}
+.login-out button:hover{background:#f4f4f4}

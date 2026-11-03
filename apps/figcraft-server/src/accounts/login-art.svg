@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1100" preserveAspectRatio="xMidYMid slice">
+  <!-- Original abstract artwork for FigCraft's sign-in page (MIT OR Apache-2.0). -->
+  <defs>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="38"/></filter>
+    <filter id="edge" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="3" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="46" xChannelSelector="R" yChannelSelector="G"/>
+      <feGaussianBlur stdDeviation="2.2"/>
+    </filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9 0.06" numOctaves="2" seed="3"/>
+      <feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 -1.4 0.9"/>
+    </filter>
+  </defs>
+  <rect width="1000" height="1100" fill="#d3c7f1"/>
+  <g filter="url(#soft)">
+    <ellipse cx="760" cy="700" rx="260" ry="330" fill="#8f96df" opacity=".75"/>
+    <ellipse cx="300" cy="180" rx="240" ry="160" fill="#e6ddfa"/>
+    <ellipse cx="880" cy="980" rx="300" ry="160" fill="#b9d1c4" opacity=".9"/>
+  </g>
+  <g filter="url(#edge)">
+    <path d="M-40 260C60 200 150 240 190 330 240 450 330 470 340 560 352 680 250 760 150 740 40 720-40 640-40 560Z" fill="#a8c2a4"/>
+    <path d="M-40 980C120 920 330 900 520 940 700 978 860 1010 1040 960V1140H-40Z" fill="#b2c9ad"/>
+    <path d="M420-40H1040V300C960 350 860 330 800 280 730 220 640 250 560 220 470 186 420 90 420-40Z" fill="#4b2a18"/>
+    <path d="M40-40H300C290 40 230 90 160 80 100 72 60 20 40-40Z" fill="#4b2a18" opacity=".92"/>
+    <path d="M560 800C640 700 760 620 860 590 900 580 910 610 880 640 800 720 690 790 600 840 560 860 540 830 560 800Z" fill="#4b2a18"/>
+    <path d="M120 200C170 150 250 170 270 230 286 280 250 320 200 316 140 312 90 250 120 200Z" fill="#b59ad8"/>
+  </g>
+  <rect width="1000" height="1100" filter="url(#grain)" opacity=".28"/>
+</svg>

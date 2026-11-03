@@ -16,6 +16,7 @@ MIT OR Apache-2.0. No third-party icon sets are used.
 | `docs/images/` (all screenshots and exports: `shot-*.png`, `art-*.png`) | FigCraft contributors | Screenshots of FigCraft showing synthetic demo documents made in FigCraft, and PNG exports of those documents by FigCraft's renderer | MIT OR Apache-2.0 | No third-party artwork |
 | `assets/figma-ui3/draw-pen.png`, `assets/figma-ui3/draw-brush.png`, `assets/figma-ui3/draw-pencil.png` | Figma | Figma's "UI3: Figma's UI Kit" (Figma Community), the Draw toolbar's tool illustrations, exported as SVG and rendered at 4× | Figma's; not licensed for redistribution | Kept by the owner for an internal, private-use build only (as `crates/ui-egui/src/icons/figma.rs` and `crates/ui-egui/src/canvas/cursors/figma.rs`); not for the shared repository |
 | `examples/*.figcraft` | FigCraft contributors | Synthetic demo documents built through FigCraft's command API; invented copy, shapes and vectors drawn from scratch, no images or embedded fonts | MIT OR Apache-2.0 | Text uses Inter (OFL, from craft-fonts or the system); no third-party artwork |
+| `apps/figcraft-server/src/accounts/login-art.svg`, the logo and dotted corner shapes in `apps/figcraft-server/src/accounts/login.html` | FigCraft contributors (AI-assisted) | Original abstract artwork (blurred and noise-edged SVG shapes) and the FigCraft "F" mark, drawn for the server's sign-in page | MIT OR Apache-2.0 | No third-party product media or logos; the Google button is text only |
 
 ## Fonts (build input, not in this repository)
 

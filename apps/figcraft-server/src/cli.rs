@@ -12,6 +12,9 @@ use figcraft_collab_net::hub::Backend;
 use figcraft_collab_net::{Endpoint, Invite, manage};
 use serde::{Deserialize, Serialize};
 
+use crate::accounts::Accounts;
+use crate::accounts::UserRow;
+use crate::accounts::http::{AdminReq, ask, operate};
 use crate::config::Config;
 use crate::disk;
 use crate::store::{self, KEY, Store};
@@ -37,6 +40,11 @@ Usage:
   figcraft-server block-ip IP                    refuse an address (an IPv6 address: its /64) and drop its connections
   figcraft-server unblock-ip IP                  accept an address again
   figcraft-server blocked                        the blocked addresses
+  figcraft-server users [list]                   the accounts
+  figcraft-server users add EMAIL [--name NAME]  make an account (prints its password)
+  figcraft-server users reset-password EMAIL     give an account a new password (prints it; signs it out)
+  figcraft-server users disable|enable EMAIL     turn an account off (signs it out) or on again
+  figcraft-server users remove EMAIL             delete an account
 
 Options (also keys of the --config TOML file):
   --listen ADDR       where to listen (default 127.0.0.1:47900; 0.0.0.0:47900 for every network)
@@ -45,6 +53,8 @@ Options (also keys of the --config TOML file):
   --config FILE       settings: listen, data, public_url, max_files, max_file_mb, max_links,
                       max_connections, max_people, compact_after, compact_mb, max_log_mb,
                       max_plugins, max_plugin_mb, max_plugins_mb, team_files, web_url;
+                      accounts: accounts_listen, signup, session_days, google_client_id
+                      (its secret in FIGCRAFT_GOOGLE_CLIENT_SECRET);
                       for a public server: open_publish,
                       operator_contact, terms_url, trusted_proxy, idle_days, max_total_mb,
                       max_files_per_ip, max_mb_per_ip, max_connections_per_ip,
@@ -87,6 +97,7 @@ pub enum Command {
     Block { ip: String },
     Unblock { ip: String },
     Blocked,
+    Users { action: String, email: String, name: String },
     Help,
     Version,
 }
@@ -108,6 +119,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
     let mut words = Vec::new();
     let mut access = None;
     let mut label = String::new();
+    let mut name = String::new();
     let mut rotate = false;
     let mut version = None;
     let mut sort = Sort::Id;
@@ -127,6 +139,7 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             "--public-url" => config.public_url = Some(value("--public-url")?),
             "--access" => access = Some(Access::parse(&value("--access")?).ok_or("--access must be edit, comment or view")?),
             "--label" => label = value("--label")?,
+            "--name" => name = value("--name")?,
             "--rotate" => rotate = true,
             "--sort" => {
                 sort = match value("--sort")?.as_str() {
@@ -158,6 +171,10 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         ["block-ip", ip] => Command::Block { ip: ip.to_string() },
         ["unblock-ip", ip] => Command::Unblock { ip: ip.to_string() },
         ["blocked"] => Command::Blocked,
+        ["users"] | ["users", "list"] => Command::Users { action: "list".into(), email: String::new(), name: String::new() },
+        ["users", action @ ("add" | "reset-password" | "disable" | "enable" | "remove"), email] => {
+            Command::Users { action: action.to_string(), email: email.to_string(), name: name.clone() }
+        }
         _ => return Err(format!("unknown command `{}`", words.join(" "))),
     };
     config.check()?;
@@ -169,16 +186,19 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
 pub struct Running {
     pub listen: SocketAddr,
     pub pid: u32,
+    /// Where the accounts' pages listen, when they are on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<SocketAddr>,
 }
 
 /// Note where the server listens (for the command line).
-pub fn write_running(data: &Path, listen: SocketAddr) -> Result<(), String> {
-    let text = serde_json::to_vec_pretty(&Running { listen, pid: std::process::id() }).map_err(|e| e.to_string())?;
+pub fn write_running(data: &Path, listen: SocketAddr, accounts: Option<SocketAddr>) -> Result<(), String> {
+    let text = serde_json::to_vec_pretty(&Running { listen, pid: std::process::id(), accounts }).map_err(|e| e.to_string())?;
     disk::write_atomic(&data.join(SERVER_JSON), &text).map_err(|e| format!("can't write {SERVER_JSON}: {e}"))
 }
 
 /// `addr` as something this machine can connect to (the loopback address for "every interface").
-fn reachable(addr: SocketAddr) -> SocketAddr {
+pub(crate) fn reachable(addr: SocketAddr) -> SocketAddr {
     match addr.ip() {
         IpAddr::V4(ip) if ip.is_unspecified() => SocketAddr::from(([127, 0, 0, 1], addr.port())),
         IpAddr::V6(ip) if ip.is_unspecified() => SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, addr.port())),
@@ -224,6 +244,7 @@ pub fn run(cli: &Cli) -> Result<String, String> {
             AdminReply::Done => Ok(format!("Unblocked {ip}.\n")),
             other => unexpected(other),
         },
+        Command::Users { action, email, name } => users(cfg, action, email, name),
         Command::Blocked => match admin(cfg, Admin::Blocked)? {
             AdminReply::Blocked(list) if list.is_empty() => Ok("No addresses are blocked.\n".into()),
             AdminReply::Blocked(list) => Ok(list.iter().map(|ip| format!("{ip}\n")).collect()),
@@ -307,11 +328,69 @@ fn unexpected(reply: AdminReply) -> Result<String, String> {
     }
 }
 
+/// What the running server wrote, when one holds the data directory.
+fn running_info(data: &Path) -> Result<Running, String> {
+    let bytes = disk::read_capped(&data.join(SERVER_JSON), 1 << 16).map_err(|e| format!("a server is using {} but {e}", data.display()))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{SERVER_JSON} is damaged ({e})"))
+}
+
 /// The running server's address, when one holds the data directory.
 fn running(data: &Path) -> Result<SocketAddr, String> {
-    let bytes = disk::read_capped(&data.join(SERVER_JSON), 1 << 16).map_err(|e| format!("a server is using {} but {e}", data.display()))?;
-    let r: Running = serde_json::from_slice(&bytes).map_err(|e| format!("{SERVER_JSON} is damaged ({e})"))?;
-    Ok(reachable(r.listen))
+    Ok(reachable(running_info(data)?.listen))
+}
+
+/// `users …`: on the data directory, or through the running server's accounts port.
+fn users(cfg: &Config, action: &str, email: &str, name: &str) -> Result<String, String> {
+    let mut req = AdminReq { key: String::new(), action: action.to_string(), email: email.to_string(), name: name.to_string() };
+    let reply = match store::lock(&cfg.data)? {
+        Some(_lock) => operate(&mut Accounts::open(&cfg.data, cfg.signup, cfg.session_days)?, &req)?,
+        None => {
+            let at = running_info(&cfg.data)?.accounts.ok_or("the running server has no accounts (set accounts_listen and restart it)")?;
+            req.key = std::fs::read_to_string(cfg.data.join(KEY)).map_err(|e| format!("can't read the server key: {e}"))?.trim().to_string();
+            ask(reachable(at), &req)?
+        }
+    };
+    Ok(match action {
+        "list" => users_table(&reply.users),
+        "add" => format!("Made an account for {email}. Its password: {}\n", reply.password),
+        "reset-password" => format!("New password for {email} (signed out everywhere): {}\n", reply.password),
+        "disable" => format!("Turned off {email} and signed it out.\n"),
+        "enable" => format!("Turned on {email}.\n"),
+        _ => format!("Removed {email}.\n"),
+    })
+}
+
+fn when(t: u64) -> String {
+    if t == 0 {
+        return "never".into();
+    }
+    i64::try_from(t).ok().and_then(|t| chrono::DateTime::from_timestamp(t, 0)).map_or_else(|| "?".into(), |d| d.format("%Y-%m-%d %H:%M").to_string())
+}
+
+fn users_table(rows: &[UserRow]) -> String {
+    if rows.is_empty() {
+        return "No accounts yet.\n".into();
+    }
+    let mut out = String::from("EMAIL                             NAME                  CREATED           LAST LOGIN        SESSIONS  SIGN-IN\n");
+    for r in rows {
+        let how = match (r.password, r.google) {
+            (true, true) => "password, Google",
+            (false, true) => "Google",
+            (true, false) => "password",
+            (false, false) => "none",
+        };
+        let _ = writeln!(
+            out,
+            "{:<32}  {:<20}  {:<16}  {:<16}  {:<8}  {how}{}",
+            elide(&r.email, 32),
+            elide(&r.name, 20),
+            when(r.created),
+            when(r.last_login),
+            r.sessions,
+            if r.disabled { " (off)" } else { "" }
+        );
+    }
+    out
 }
 
 /// Do one request: through the running server, or on the data directory.

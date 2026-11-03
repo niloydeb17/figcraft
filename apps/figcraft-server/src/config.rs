@@ -80,6 +80,17 @@ pub struct Config {
     /// Where the browser build is served for this server (`https://figcraft.example.com/app/`): the
     /// team list's browser links point there. Empty: none.
     pub web_url: String,
+    /// Where the accounts' sign-in pages and API listen (`0.0.0.0:47901`, behind the same reverse
+    /// proxy as `listen`, which sends `/login`, `/logout` and `/auth/` there). Empty: no accounts.
+    pub accounts_listen: String,
+    /// Anyone may make an account on the sign-in page (off: only the operator's `users add`).
+    pub signup: bool,
+    /// Days a sign-in lasts without being used.
+    pub session_days: f64,
+    /// A Google OAuth client id: "Continue with Google" is offered once this is set and the
+    /// environment has its secret (`FIGCRAFT_GOOGLE_CLIENT_SECRET`). Its redirect URI is
+    /// `<web_url>auth/google/callback`.
+    pub google_client_id: String,
 }
 
 impl Default for Config {
@@ -113,6 +124,10 @@ impl Default for Config {
             messages_per_second: 200,
             team_files: String::new(),
             web_url: String::new(),
+            accounts_listen: String::new(),
+            signup: true,
+            session_days: 21.0,
+            google_client_id: String::new(),
         }
     }
 }
@@ -215,6 +230,15 @@ impl Config {
         Err("`web_url` must be a web address without a query (https://figcraft.example.com/app/), at most 500 characters".into())
     }
 
+    /// Where the accounts listen, when they are on.
+    pub fn accounts_addr(&self) -> Result<Option<SocketAddr>, String> {
+        let a = self.accounts_listen.trim();
+        if a.is_empty() {
+            return Ok(None);
+        }
+        a.parse().map(Some).map_err(|_| "`accounts_listen` must be an address with a port, like 0.0.0.0:47901 (empty: no accounts)".to_string())
+    }
+
     /// The trusted proxy's address, when set.
     pub fn proxy(&self) -> Result<Option<IpAddr>, String> {
         let Some(p) = self.trusted_proxy.as_deref().map(str::trim).filter(|p| !p.is_empty()) else { return Ok(None) };
@@ -228,6 +252,19 @@ impl Config {
         self.proxy()?;
         self.team()?;
         self.web()?;
+        if self.accounts_addr()?.is_some_and(|a| self.addr().is_ok_and(|l| l.port() == a.port() && a.port() != 0)) {
+            return Err("`accounts_listen` needs a port of its own (not `listen`'s)".into());
+        }
+        if !self.session_days.is_finite() || !(0.01..=3650.0).contains(&self.session_days) {
+            return Err("`session_days` must be from 0.01 to 3650".into());
+        }
+        let g = self.google_client_id.trim();
+        if g.len() > 256 || g.contains(char::is_whitespace) || g.contains(char::is_control) {
+            return Err("`google_client_id` is a Google OAuth client id (…apps.googleusercontent.com)".into());
+        }
+        if !g.is_empty() && self.web()?.is_empty() {
+            return Err("`google_client_id` needs `web_url` (Google sends people back to <web_url>auth/google/callback)".into());
+        }
         if !self.idle_days.is_finite() || !(0.0..=3650.0).contains(&self.idle_days) {
             return Err("`idle_days` must be from 0 to 3650".into());
         }

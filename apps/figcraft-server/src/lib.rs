@@ -9,6 +9,7 @@
 //! links are the access, and the server key manages files.
 
 pub mod abuse;
+pub mod accounts;
 pub mod cli;
 pub mod codes;
 pub mod config;
@@ -17,9 +18,13 @@ pub mod disk;
 pub mod store;
 
 use std::net::{SocketAddr, TcpListener};
+use std::sync::{Arc, Mutex};
 
 use figcraft_collab_net::hub::Hosting;
 
+use crate::accounts::http::{AuthServer, Ctx, Settings};
+use crate::accounts::pages::Site;
+use crate::accounts::{Accounts, google};
 use crate::config::Config;
 use crate::store::Store;
 
@@ -27,12 +32,18 @@ use crate::store::Store;
 /// restarting (their apps reconnect once it is back).
 pub struct Running {
     hosting: Hosting,
+    accounts: Option<AuthServer>,
 }
 
 impl Running {
     /// Where it listens.
     pub fn addr(&self) -> SocketAddr {
         self.hosting.addr()
+    }
+
+    /// Where the accounts' pages listen, when they are on.
+    pub fn accounts_addr(&self) -> Option<SocketAddr> {
+        self.accounts.as_ref().map(AuthServer::addr)
     }
 
     /// Open connections.
@@ -52,6 +63,9 @@ impl Running {
 
     /// Stop (see the type's docs).
     pub fn stop(&mut self) {
+        if let Some(a) = &mut self.accounts {
+            a.stop();
+        }
         self.hosting.stop();
     }
 }
@@ -70,7 +84,11 @@ pub fn start(cfg: &Config) -> Result<Running, String> {
     let addr = cfg.addr()?;
     let listener = TcpListener::bind(addr).map_err(|e| format!("can't listen on {addr}: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
-    cli::write_running(&cfg.data, addr)?;
+    let accounts = match cfg.accounts_addr()? {
+        Some(at) => Some(start_accounts(cfg, at, store.key())?),
+        None => None,
+    };
+    cli::write_running(&cfg.data, addr, accounts.as_ref().map(AuthServer::addr))?;
     let public = cli::public_endpoint(cfg, addr)?;
     let hosting = Hosting::serve(listener, store, cfg.net()).map_err(|e| format!("can't start serving: {e}"))?;
     log::info!(
@@ -83,9 +101,54 @@ pub fn start(cfg: &Config) -> Result<Running, String> {
     if addr.ip().is_loopback() && cfg.public_url.is_none() {
         log::info!("only this machine can connect: listen on 0.0.0.0:{} (or behind a reverse proxy) to share", addr.port());
     }
-    Ok(Running { hosting })
+    Ok(Running { hosting, accounts })
 }
 
+/// `scheme://host[:port]` of a web address.
+fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
+    Some(format!("{scheme}://{host}"))
+}
+
+/// Serve the accounts' sign-in pages on `at`.
+fn start_accounts(cfg: &Config, at: SocketAddr, key: &str) -> Result<AuthServer, String> {
+    let accounts = Accounts::open(&cfg.data, cfg.signup, cfg.session_days)?;
+    let web = cfg.web()?;
+    let id = cfg.google_client_id.trim();
+    let secret = std::env::var(google::SECRET_ENV).unwrap_or_default();
+    let google = if id.is_empty() {
+        None
+    } else if secret.trim().is_empty() {
+        log::warn!("accounts: google_client_id is set but {} is empty: Google sign-in stays off", google::SECRET_ENV);
+        None
+    } else {
+        let base = if web.ends_with('/') { web.clone() } else { format!("{web}/") };
+        Some(google::Client { id: id.to_string(), secret: secret.trim().to_string(), redirect: format!("{base}auth/google/callback") })
+    };
+    let settings = Settings {
+        origin: origin(&web),
+        secure: web.starts_with("https://"),
+        // `check` keeps the days finite, from 0.01 to 3650.
+        idle: (cfg.session_days * 86_400.0).round() as u64,
+        google,
+        site: Site { contact: cfg.operator_contact.trim().to_string(), terms: cfg.terms_url.trim().to_string() },
+        key: key.to_string(),
+    };
+    let listener = TcpListener::bind(at).map_err(|e| format!("can't listen for the accounts on {at}: {e}"))?;
+    let at = listener.local_addr().map_err(|e| e.to_string())?;
+    log::info!(
+        "accounts: {} account{}; sign-in pages on {at}; sign-up {}; Google sign-in {}",
+        accounts.len(),
+        if accounts.len() == 1 { "" } else { "s" },
+        if cfg.signup { "open" } else { "closed" },
+        if settings.google.is_some() { "on" } else { "off" }
+    );
+    AuthServer::start(listener, Ctx::new(Arc::new(Mutex::new(accounts)), settings))
+}
+
+#[cfg(test)]
+mod accounts_tests;
 #[cfg(test)]
 mod admin_budget_tests;
 #[cfg(test)]

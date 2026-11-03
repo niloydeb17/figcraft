@@ -36,6 +36,12 @@ server {
   proxy_read_timeout 120s;
   proxy_send_timeout 120s;
   location /healthz { proxy_pass http://server:47900; }
+  # Accounts: the server's sign-in pages and API.
+  location = /login { proxy_pass http://server:47901; }
+  location = /login.css { proxy_pass http://server:47901; }
+  location = /login-art.svg { proxy_pass http://server:47901; }
+  location = /logout { proxy_pass http://server:47901; }
+  location ^~ /auth/ { proxy_pass http://server:47901; }
   location ~* \.(wasm|js)$ {
     add_header Cache-Control "public, max-age=31536000, immutable";
   }
