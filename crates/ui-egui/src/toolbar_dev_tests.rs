@@ -157,3 +157,25 @@ fn copy_colors_puts_the_sampled_colour_on_the_clipboard() {
         out.platform_output.commands.iter().any(|c| matches!(c, egui::output::OutputCommand::CopyText(t) if t.eq_ignore_ascii_case("#FF8000")));
     assert!(copied, "{:?}", out.platform_output.commands);
 }
+
+/// Draw mode swaps the rows as Dev Mode does: the pill grows from the design width to the Draw
+/// pill's 625 pt over the switch, and back.
+#[test]
+fn switching_to_draw_mode_grows_the_pill_over_the_switch() {
+    let mut u = Ui::new(Session::new());
+    u.frames(5);
+    let (_, _, design) = anim_state(&u.ctx).expect("drawn");
+    u.app.ui.draw_mode = true;
+    u.frames(4);
+    let (_, _, early) = anim_state(&u.ctx).expect("drawn");
+    assert_eq!(early, design, "the rows move first, the pill waits");
+    u.frames(26);
+    let (_, _, mid) = anim_state(&u.ctx).expect("drawn");
+    assert!(mid > design && mid < 625.0, "{mid} between {design} and 625");
+    u.frames(60);
+    assert_eq!(anim_state(&u.ctx).map(|s| s.2), Some(625.0));
+    assert_eq!(bar_width(&u.app), 625.0);
+    u.app.ui.draw_mode = false;
+    u.frames(80);
+    assert_eq!(anim_state(&u.ctx).map(|s| s.2), Some(design));
+}

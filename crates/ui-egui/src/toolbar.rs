@@ -314,6 +314,13 @@ fn mode_anim(app: &FigApp, ctx: &egui::Context, dev: bool) -> (f32, f32) {
     mode_progress(ctx.animate_bool_with_time(egui::Id::unique("toolbar_dev"), dev, time))
 }
 
+/// How far the switch to Draw mode has got, as [`mode_anim`]'s (the design row slides down out
+/// of the pill as the Draw row comes in from above, the pill following).
+fn draw_anim(app: &FigApp, ctx: &egui::Context, draw: bool) -> (f32, f32) {
+    let time = if app.reduce_motion() { 0.0 } else { 0.66 };
+    mode_progress(ctx.animate_bool_with_time(egui::Id::unique("toolbar_draw"), draw, time))
+}
+
 /// The slide and the growth at `u` (0..1, the switch's linear progress): the rows slide over the
 /// first half, the pill follows from 40% on, each easing out.
 fn mode_progress(u: f32) -> (f32, f32) {
@@ -344,9 +351,12 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         app.ui.dev.measure_on = false;
     }
     let (slide, grow) = if board { (0.0, 0.0) } else { mode_anim(app, ui.ctx(), dev) };
+    // Draw mode (on the Design panel only) swaps the design row for its own the same way.
     let draw = !board && draw_mode(app);
-    let design_w = if draw { draw_width() } else { main_width(groups, board) };
-    let width = design_w + (dev_width() - design_w) * grow;
+    let (dslide, dgrow) = if board { (0.0, 0.0) } else { draw_anim(app, ui.ctx(), draw) };
+    let design_w = main_width(groups, board);
+    let tools_w = design_w + (draw_width() - design_w) * dgrow;
+    let width = tools_w + (dev_width() - tools_w) * grow;
     ui.data_mut(|d| d.insert_temp(anim_id(), (slide, grow, width)));
     let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
     let cy = rect.center().y;
@@ -359,14 +369,38 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     // The design row slides down out of the pill as the Dev Mode row comes in from above.
     if slide < 1.0 {
         let row_y = cy + slide * PILL_H;
-        if draw {
-            x = draw_row(app, ui, x, row_y, rect, outer_clip, t);
-        } else {
+        let start = x;
+        // The row on its way out first, so the one coming in has the last word (the Actions
+        // button's place); each where its slide puts it.
+        let design_row = |app: &mut FigApp, ui: &mut Ui| {
+            let y = row_y + dslide * PILL_H;
+            let mut x = start;
             for g in groups {
-                x = group_cell(app, ui, g, pos2(x, row_y), rect.min.y, t);
+                x = group_cell(app, ui, g, pos2(x, y), rect.min.y, t);
             }
+            actions_button(app, ui, x, y, t)
+        };
+        // Its own ids: both rows are on screen while they swap.
+        let draw_tools = |app: &mut FigApp, ui: &mut Ui| {
+            let y = row_y + (dslide - 1.0) * PILL_H;
+            ui.push_id("draw_row", |ui| {
+                let x = draw_row(app, ui, start, y, rect, outer_clip, t);
+                actions_button(app, ui, x, y, t)
+            })
+            .inner
+        };
+        let (shown_design, shown_draw) = (dslide < 1.0, dslide > 0.0);
+        if draw {
+            if shown_design {
+                design_row(app, ui);
+            }
+            x = draw_tools(app, ui);
+        } else {
+            if shown_draw {
+                draw_tools(app, ui);
+            }
+            x = design_row(app, ui);
         }
-        x = actions_button(app, ui, x, row_y, t);
     }
     if slide > 0.0 {
         let end = dev_row(app, ui, rect.min.x + PAD, cy + (slide - 1.0) * PILL_H, t);
@@ -407,7 +441,10 @@ fn draw_row(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, pill: Rect, outer_cl
     divider(ui, t, x, cy);
     x += DIVIDER + GAP;
     let shift = cy - pill.center().y;
-    let clip = Rect::from_min_max(pos2(x, pill.min.y - DRAW_CHOSEN_RISE), pos2(x + 3.0 * DRAW_CELL, pill.max.y)).translate(vec2(0.0, shift));
+    // The pill's bottom always cuts the tools off; they may stand above its top only while the
+    // row is in place (sliding in or out, the pill clips them).
+    let top = pill.min.y - DRAW_CHOSEN_RISE + shift.abs().min(DRAW_CHOSEN_RISE);
+    let clip = Rect::from_min_max(pos2(x, top), pos2(x + 3.0 * DRAW_CELL, pill.max.y));
     let painter = ui.painter().with_clip_rect(clip.intersect(outer_clip));
     let chosen = drawn(app);
     let time = if app.reduce_motion() { 0.0 } else { 0.15 };
