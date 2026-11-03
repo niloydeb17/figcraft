@@ -2,7 +2,9 @@
 //! gradient fill is open in the colour picker), image crop handles (while a Crop-mode image
 //! fill is open), progressive blur handles (while a progressive blur's settings are open) and
 //! auto layout padding/gap handles (item gaps, wrapped row gaps, grid column
-//! and row gaps, with the grid's tracks outlined).
+//! and row gaps, with the grid's tracks outlined). A padding or gap is dragged by the short bar
+//! across the middle of its band, not from anywhere in the band, so that a press meant for the
+//! frame or a child doesn't change the spacing.
 
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Shape, Stroke, StrokeKind, pos2, vec2};
 use figcraft_color::{ImagePaint, ImageScaleMode, Paint, PaintKind};
@@ -25,8 +27,13 @@ const DEV_BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
 
 /// A readout: white `label` on a `color` pill centred at `center`.
 fn badge(painter: &egui::Painter, label: String, center: Pos2, color: Color32) -> Rect {
+    badge_at(painter, label, center, Align2::CENTER_CENTER, color)
+}
+
+/// A readout pill placed by `align` at `pos`.
+fn badge_at(painter: &egui::Painter, label: String, pos: Pos2, align: Align2, color: Color32) -> Rect {
     let galley = painter.layout_no_wrap(label, semibold(10.0), Color32::WHITE);
-    let rect = Rect::from_center_size(center, galley.size() + vec2(8.0, 4.0));
+    let rect = align.anchor_size(pos, galley.size() + vec2(8.0, 4.0));
     painter.rect_filled(rect, CornerRadius::same(3), color);
     painter.galley(rect.min + vec2(4.0, 2.0), galley, Color32::WHITE);
     rect
@@ -55,8 +62,9 @@ pub(crate) fn hatch_lines(r: Rect, spacing: f32) -> Vec<[Pos2; 2]> {
 }
 
 /// A spacing highlight in the kit's style: diagonal stripes in `color`, a line along each long edge,
-/// a dimension line across the band through its middle, and `label` on a pill there.
-pub(crate) fn spacing_band(painter: &egui::Painter, r: Rect, color: Color32, label: String) {
+/// a dimension line across the band through its middle, and `label` on a pill there (beside the
+/// band's drag bar `mark` when it has one, so the pill doesn't cover it).
+pub(crate) fn spacing_band(painter: &egui::Painter, r: Rect, color: Color32, label: String, mark: Option<[Pos2; 2]>) {
     let visible = r.intersect(painter.clip_rect());
     let stripe = Stroke::new(1.0, color.gamma_multiply(0.45));
     for [a, b] in hatch_lines(visible, 4.0) {
@@ -73,7 +81,15 @@ pub(crate) fn spacing_band(painter: &egui::Painter, r: Rect, color: Color32, lab
         painter.line_segment([r.right_top(), r.right_bottom()], edge);
         painter.line_segment([pos2(r.min.x, c.y), pos2(r.max.x, c.y)], edge);
     }
-    badge(painter, label, c, color);
+    match mark {
+        Some([a, b]) => {
+            let at = pos2(a.x.max(b.x) + MARK_REACH, (a.y + b.y) / 2.0);
+            badge_at(painter, label, at, Align2::LEFT_CENTER, color);
+        }
+        None => {
+            badge(painter, label, c, color);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -323,21 +339,65 @@ fn screen_to_unit(app: &FigApp, id: NodeId, s: Pos2) -> Option<(f64, f64)> {
     Some((l.x / n.width.max(1e-9), l.y / n.height.max(1e-9)))
 }
 
-/// A gap band between auto layout items (screen space): the prop it edits, its value and the
-/// drag axis.
+/// The length of the bar a padding or gap is dragged by, and how near it the pointer takes it
+/// (screen pixels).
+const MARK_LEN: f32 = 12.0;
+const MARK_REACH: f32 = 5.0;
+/// A padding bar stays this far in from the frame's edge, clear of the edge's resize handle
+/// (screen pixels).
+const MARK_INSET: f32 = 10.0;
+
+/// The bar across spacing band `r` at `at` along the drag axis (y when `vertical`), square to the
+/// drag; none when the band is too short to hold one.
+fn mark(r: Rect, vertical: bool, at: f32) -> Option<[Pos2; 2]> {
+    let (c, half) = (r.center(), MARK_LEN / 2.0);
+    if !at.is_finite() || !r.is_finite() {
+        return None;
+    }
+    if vertical {
+        (r.width() >= MARK_LEN).then(|| [pos2(c.x - half, at), pos2(c.x + half, at)])
+    } else {
+        (r.height() >= MARK_LEN).then(|| [pos2(at, c.y - half), pos2(at, c.y + half)])
+    }
+}
+
+/// The pointer over a padding or gap bar dragged along y when `vertical`: the resize arrows
+/// through a bar (the kit's padding cursor when its cursors are on).
+fn spacing_cursor(vertical: bool) -> egui::CursorIcon {
+    if vertical { egui::CursorIcon::ResizeRow } else { egui::CursorIcon::ResizeColumn }
+}
+
+/// Whether screen point `pos` takes the bar `m`.
+fn on_mark(m: Option<[Pos2; 2]>, pos: Pos2) -> bool {
+    m.is_some_and(|[a, b]| Rect::from_two_pos(a, b).expand(MARK_REACH).contains(pos))
+}
+
+/// A padding band (screen space): side 0 top, 1 right, 2 bottom, 3 left, its value and its bar.
+#[derive(Clone, Copy)]
+struct PadZone {
+    side: usize,
+    rect: Rect,
+    value: f64,
+    mark: Option<[Pos2; 2]>,
+}
+
+/// A gap band between auto layout items (screen space): the prop it edits, its value, the drag
+/// axis and its bar.
 #[derive(Clone, Copy)]
 struct GapZone {
     rect: Rect,
     key: &'static str,
     value: f64,
     vertical: bool,
+    mark: Option<[Pos2; 2]>,
 }
 
 /// Auto layout zones of a single selected AL frame, in screen space.
 struct Zones {
     id: NodeId,
-    /// Padding bands: (side, rect, value).
-    bands: Vec<(usize, Rect, f64)>,
+    /// The frame's box.
+    frame: Rect,
+    pads: Vec<PadZone>,
     gaps: Vec<GapZone>,
     /// Grid frames: the track boundaries to outline (screen-space segments).
     tracks: Vec<[Pos2; 2]>,
@@ -364,19 +424,33 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
     let band = |x0: f64, y0: f64, x1: f64, y1: f64| Rect::from_two_pos(to(x0, y0), to(x1, y1));
     let [pt, pr, pb, pl] = al.padding;
     let (fw, fh) = (n.width, n.height);
-    let bands = vec![
-        (0, band(0.0, 0.0, fw, pt.max(4.0)), pt),
-        (1, band(fw - pr.max(4.0), 0.0, fw, fh), pr),
-        (2, band(0.0, fh - pb.max(4.0), fw, fh), pb),
-        (3, band(0.0, 0.0, pl.max(4.0), fh), pl),
+    let pad = |side: usize, rect: Rect, value: f64| {
+        // Across the band's middle, but clear of the frame's edge when the padding is thin.
+        let c = rect.center();
+        let at = match side {
+            0 => c.y.max(rect.min.y + MARK_INSET),
+            1 => c.x.min(rect.max.x - MARK_INSET),
+            2 => c.y.min(rect.max.y - MARK_INSET),
+            _ => c.x.max(rect.min.x + MARK_INSET),
+        };
+        PadZone { side, rect, value, mark: mark(rect, side.is_multiple_of(2), at) }
+    };
+    let pads = vec![
+        pad(0, band(0.0, 0.0, fw, pt.max(4.0)), pt),
+        pad(1, band(fw - pr.max(4.0), 0.0, fw, fh), pr),
+        pad(2, band(0.0, fh - pb.max(4.0), fw, fh), pb),
+        pad(3, band(0.0, 0.0, pl.max(4.0), fh), pl),
     ];
     // An auto gap shows (and is dragged from) the distance the layout gives it; the drag makes it a
     // fixed gap again, as typing one does.
     let (auto_main, auto_cross) =
         (al.main_align.is_auto_gap() && al.mode != LayoutMode::Grid, al.wrap && al.content_align == ContentAlign::SpaceBetween);
-    let main = |rect: Rect, vertical: bool, dist: f64| GapZone { rect, key: "gap", value: if auto_main { dist } else { al.gap }, vertical };
-    let cross =
-        |rect: Rect, vertical: bool, dist: f64| GapZone { rect, key: "crossGap", value: if auto_cross { dist } else { al.cross_gap }, vertical };
+    let gap = |rect: Rect, key: &'static str, value: f64, vertical: bool| {
+        let c = rect.center();
+        GapZone { rect, key, value, vertical, mark: mark(rect, vertical, if vertical { c.y } else { c.x }) }
+    };
+    let main = |rect: Rect, vertical: bool, dist: f64| gap(rect, "gap", if auto_main { dist } else { al.gap }, vertical);
+    let cross = |rect: Rect, vertical: bool, dist: f64| gap(rect, "crossGap", if auto_cross { dist } else { al.cross_gap }, vertical);
     let mut gaps = Vec::new();
     let mut tracks = Vec::new();
     if let Some(g) = figcraft_layout::grid_geometry(doc, id) {
@@ -437,8 +511,9 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
             }
         }
     }
-    gaps.retain(|g| g.rect.width() > 0.5 && g.rect.height() > 0.5);
-    Some(Zones { id, bands, gaps, tracks })
+    // A gap of 0 keeps its bar, on the line where the items meet.
+    gaps.retain(|g| g.rect.width().max(g.rect.height()) > 0.5);
+    Some(Zones { id, frame: band(0.0, 0.0, fw, fh), pads, gaps, tracks })
 }
 
 /// The gradient's line, stops and end handles on the canvas.
@@ -530,15 +605,16 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         Some(Drag::Padding { side, .. }) => Some(*side),
         _ => None,
     };
-    // Pink while designing, the kit's blue in Dev Mode.
-    let color = if app.ui.right_tab == RightTab::Inspect { DEV_BLUE } else { PINK };
+    // The selection's blue while designing, the kit's blue in Dev Mode.
+    let accent = crate::theme::canvas_accent(painter.ctx());
+    let color = if app.ui.right_tab == RightTab::Inspect { DEV_BLUE } else { accent };
     for seg in &z.tracks {
         painter.add(Shape::dashed_line(seg, Stroke::new(1.0, color.gamma_multiply(0.6)), 3.0, 3.0));
     }
-    for (side, r, v) in &z.bands {
-        let hot = hover.is_some_and(|h| r.contains(h)) || active_side == Some(*side);
+    for p in &z.pads {
+        let hot = hover.is_some_and(|h| p.rect.contains(h) || on_mark(p.mark, h)) || active_side == Some(p.side);
         if hot {
-            spacing_band(painter, *r, color, crate::canvas::fmt(*v));
+            spacing_band(painter, p.rect, color, crate::canvas::fmt(p.value), p.mark);
         }
     }
     let drag_key = match &dragging {
@@ -546,13 +622,29 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         _ => None,
     };
     for g in &z.gaps {
-        let r = g.rect;
-        let hot = hover.is_some_and(|h| r.contains(h)) || drag_key == Some(g.key);
+        let hot = hover.is_some_and(|h| g.rect.contains(h) || on_mark(g.mark, h)) || drag_key == Some(g.key);
         if hot {
-            spacing_band(painter, r, color, crate::canvas::fmt(g.value));
+            spacing_band(painter, g.rect, color, crate::canvas::fmt(g.value), g.mark);
         }
     }
-    let _ = Align2::CENTER_CENTER;
+    // The bars to drag by, while the pointer is over the frame: padding in the band's blue, gaps
+    // in pink (the kit's blue in Dev Mode).
+    if dragging.is_none() && !hover.is_some_and(|h| z.frame.expand(MARK_INSET).contains(h)) {
+        return;
+    }
+    let gap_color = if app.ui.right_tab == RightTab::Inspect { DEV_BLUE } else { PINK };
+    for m in z.pads.iter().filter_map(|p| p.mark) {
+        draw_mark(painter, m, color);
+    }
+    for m in z.gaps.iter().filter_map(|g| g.mark) {
+        draw_mark(painter, m, gap_color);
+    }
+}
+
+/// A bar to drag a padding or gap by: `color` with a white rim, so it reads on any fill.
+fn draw_mark(painter: &egui::Painter, [a, b]: [Pos2; 2], color: Color32) {
+    painter.line_segment([a, b], Stroke::new(4.0, Color32::WHITE));
+    painter.line_segment([a, b], Stroke::new(2.0, color));
 }
 
 /// Pointer handling; returns true when a handle owns the pointer this frame.
@@ -569,7 +661,11 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     if let Some(drag) = dragging {
         if down {
             apply(app, &drag, pos, shift);
-            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            ctx.set_cursor_icon(match drag {
+                Drag::Padding { side, .. } => spacing_cursor(side.is_multiple_of(2)),
+                Drag::Gap { vertical, .. } => spacing_cursor(vertical),
+                _ => egui::CursorIcon::Grabbing,
+            });
         }
         if released || !down {
             let _ = app.session.commit_interaction();
@@ -671,27 +767,29 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     if app.session.tool.tool != figcraft_engine::ToolId::Move || app.session.tool.busy() {
         return false;
     }
-    let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return false };
-    for (side, r, v) in bands {
-        if r.contains(pos) {
-            ctx.set_cursor_icon(if side % 2 == 0 { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
+    // The frame's own resize handles come first where a bar runs near its edge.
+    if on_resize_handle(app, pos) {
+        return false;
+    }
+    let Some(Zones { id, pads, gaps, .. }) = al_zones(app) else { return false };
+    for p in pads {
+        if on_mark(p.mark, pos) {
+            ctx.set_cursor_icon(spacing_cursor(p.side.is_multiple_of(2)));
             if pressed {
                 let _ = app.session.begin_interaction("Padding");
-                ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value: v }));
-                return true;
+                ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side: p.side, start: pos, value: p.value }));
             }
-            return false;
+            return true;
         }
     }
     for g in gaps {
-        if g.rect.contains(pos) {
-            ctx.set_cursor_icon(if g.vertical { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
+        if on_mark(g.mark, pos) {
+            ctx.set_cursor_icon(spacing_cursor(g.vertical));
             if pressed {
                 let _ = app.session.begin_interaction("Gap");
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gap { id, start: pos, value: g.value, vertical: g.vertical, key: g.key }));
-                return true;
             }
-            return false;
+            return true;
         }
     }
     false

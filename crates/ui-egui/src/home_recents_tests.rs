@@ -67,9 +67,9 @@ fn columns_follow_the_width() {
     // Nonsense widths still give one column.
     assert_eq!(grid_columns(f32::NAN).0, 1);
     assert_eq!(grid_columns(-5.0).0, 1);
-    // A card's picture is 16:9 over a 58-point footer.
+    // A card's picture is 16:9 over a 60-point footer.
     let (picture, card) = crate::home_recents::card_heights(352.0);
-    assert_eq!((picture, card), (198.0, 256.0));
+    assert_eq!((picture, card), (198.0, 258.0));
 }
 
 fn shown(path: &str, modified: Option<u64>, created: Option<u64>) -> Shown {
@@ -289,7 +289,7 @@ fn cards_show_pictures_on_their_page_colour_with_name_and_time() {
         assert!(has_text(&s, want), "{want}: {:?}", texts(&s));
     }
     // The toolbar.
-    assert!(has_text(&s, "Recent files") && has_text(&s, "Last modified"));
+    assert!(has_text(&s, "Recently viewed") && has_text(&s, "Last modified"));
 }
 
 #[test]

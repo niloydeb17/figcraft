@@ -235,6 +235,7 @@ fn a_finished_background_render_wakes_the_ui() {
         outlined: vec![],
         skip: vec![],
         solo: None,
+        lifted: vec![],
         proof: false,
         dots: None,
         uid: 0,

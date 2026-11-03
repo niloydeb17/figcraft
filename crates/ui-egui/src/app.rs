@@ -17,6 +17,14 @@ mod frame;
 mod ime;
 
 impl FigApp {
+    /// Show `bytes` (an image the page's server sent) as the signed-in account's picture; false
+    /// when they aren't a picture (the initials stay).
+    pub fn set_account_picture(&mut self, ctx: &egui::Context, bytes: &[u8]) -> bool {
+        self.ui.account_picture = crate::account_picture::decode(ctx, bytes);
+        ctx.request_repaint();
+        self.ui.account_picture.is_some()
+    }
+
     /// Construct `FigApp` from a session and services, taking panel widths and pages height
     /// from preferences and initializing UI, canvas, clocks, capture/IME and transient channel
     /// state.
@@ -296,47 +304,37 @@ impl FigApp {
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow && !right_minimized) || mobile == Some(MobilePanel::Right);
-        if !hidden && !minimized && (!narrow || mobile == Some(MobilePanel::Left)) {
-            egui::Panel::left("left_rail")
-                .exact_size(layers::RAIL_WIDTH)
-                .resizable(false)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
-                .show(ui, |ui| {
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, i18n::tr("Sidebar"));
-                    layers::rail(self, ui)
-                });
-        }
+        let rail_open = !hidden && !minimized && (!narrow || mobile == Some(MobilePanel::Left));
         // The panels are as wide as asked, less in a window too small for them and the canvas.
         let left_open = !hidden && !minimized && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+        let beside_rail = ui.available_width() - if rail_open { layers::RAIL_WIDTH } else { 0.0 };
         let (left_w, right_w) = if narrow {
-            let w = (ui.available_width() - MOBILE_STRIP).max(0.0);
+            let w = (beside_rail - MOBILE_STRIP).max(0.0);
             (if left_open { w } else { 0.0 }, w)
         } else {
             // Dev Mode's panel is wider: its code and the box model need the room.
             let dev = self.ui.right_tab == RightTab::Inspect;
             let right = if dev { self.ui.right_width.max(crate::state::DEV_PANEL_W) } else { self.ui.right_width };
-            fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), right_open.then_some(right))
+            fit_panels(beside_rail, left_open.then_some(self.ui.left_width), right_open.then_some(right))
         };
-        let rows = ui.available_rect_before_wrap().y_range();
-        let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
-        if left_open {
-            if !narrow {
-                edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
-            }
-            egui::Panel::left("left_panel")
+        // The motion timeline along the whole bottom, under the canvas and both sidebars (as seen in
+        // the running incumbent: the sidebars stop above it), its names column as wide as the left
+        // sidebar (View ▸ Motion timeline). Placed first so it takes the full width.
+        crate::panels::motion_timeline::tick(self, &ctx);
+        if !hidden && mobile.is_none() && self.session.ds().is_ok_and(|d| d.motion.panel) {
+            let names_w = if rail_open && left_open && !narrow { layers::RAIL_WIDTH + left_w } else { crate::panels::motion_timeline::NAMES_W };
+            egui::Panel::bottom("motion_timeline")
                 .resizable(false)
-                .exact_size(left_w)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
+                .exact_size(crate::panels::motion_timeline::HEIGHT)
+                .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
-                    let label = match self.ui.left_tab {
-                        _ if self.ui.versions.open => i18n::tr("Version history"),
-                        LeftTab::File => i18n::tr("Layers"),
-                        LeftTab::Assets => i18n::tr("Assets"),
-                    };
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Pane, label);
-                    layers::left_panel(self, ui)
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, i18n::tr("Motion timeline"));
+                    crate::panels::motion_timeline::show(self, ui, names_w);
                 });
         }
+        // The panels' edges stop at the timeline too.
+        let rows = ui.available_rect_before_wrap().y_range();
+        let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
         self.ui.right_panel_rect = None;
         if right_open {
             if !narrow {
@@ -356,6 +354,34 @@ impl FigApp {
                     };
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
                     right::right_panel(self, ui)
+                });
+        }
+        if rail_open {
+            egui::Panel::left("left_rail")
+                .exact_size(layers::RAIL_WIDTH)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
+                .show(ui, |ui| {
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, i18n::tr("Sidebar"));
+                    layers::rail(self, ui)
+                });
+        }
+        if left_open {
+            if !narrow {
+                edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
+            }
+            egui::Panel::left("left_panel")
+                .resizable(false)
+                .exact_size(left_w)
+                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
+                .show(ui, |ui| {
+                    let label = match self.ui.left_tab {
+                        _ if self.ui.versions.open => i18n::tr("Version history"),
+                        LeftTab::File => i18n::tr("Layers"),
+                        LeftTab::Assets => i18n::tr("Assets"),
+                    };
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Pane, label);
+                    layers::left_panel(self, ui)
                 });
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {

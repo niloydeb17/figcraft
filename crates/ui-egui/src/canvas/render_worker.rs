@@ -61,6 +61,8 @@ pub struct Job {
     pub skip: Vec<NodeId>,
     /// Only this layer (the focus view).
     pub solo: Option<NodeId>,
+    /// Only these layers, over nothing (layers being dragged: see `canvas::lift`).
+    pub lifted: Vec<NodeId>,
     /// Soft-proof sRGB: stripe the colours sRGB can't show.
     pub proof: bool,
     /// A board's dot grid under the layers.
@@ -90,6 +92,8 @@ pub struct Done {
     pub at: Instant,
     /// The request it answers, numbered by the worker in order (0 outside a worker).
     pub seq: u64,
+    /// Drawn without some layers ([`Job::skip`]): the rest of the page under layers being dragged.
+    pub skipped: bool,
 }
 
 /// A render of a document in `profile` as a texture image for the screen (sRGB).
@@ -122,6 +126,7 @@ fn options(job: &Job) -> figcraft_render::Options {
         outlined: job.outlined.clone(),
         skip: job.skip.clone(),
         solo: job.solo,
+        lifted: job.lifted.clone(),
         lod: true,
         magnified_image_pixels: true,
         dots: job.dots,
@@ -142,7 +147,7 @@ fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool) 
     if job.proof {
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
-    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
+    Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0, skipped: !job.skip.is_empty() }
 }
 
 /// `view` with [`PREVIEW_FACTOR`] times fewer pixels each way, showing at least the same area.
@@ -528,6 +533,22 @@ impl Worker {
         }
         best
     }
+
+    /// [`Self::poll`], waiting up to `budget` for the refined image of the newest request: an edit
+    /// that renders quickly (a layer dragged) then shows in the frame that made it, with the
+    /// overlays drawn from the same document, rather than a frame or more behind them.
+    pub fn poll_within(&mut self, budget: std::time::Duration) -> Option<Done> {
+        let deadline = Instant::now() + budget;
+        let mut best = self.poll();
+        while !best.as_ref().is_some_and(|d| d.seq >= self.submitted && !d.coarse) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(left) {
+                Ok(d) => best = Some(better(best, d)),
+                Err(_) => break,
+            }
+        }
+        best
+    }
 }
 
 /// The browser's worker: renders inline, one image a frame: a preview first when one is due, the
@@ -592,6 +613,10 @@ impl Inline {
     }
     pub fn poll(&mut self) -> Option<Done> {
         self.poll_at(Instant::now())
+    }
+    /// [`Self::poll`]: an edit already renders within the frame that asks for it.
+    pub fn poll_within(&mut self, _budget: std::time::Duration) -> Option<Done> {
+        self.poll()
     }
     /// [`Self::poll`] as of `now` (tests pass the time, so a busy machine can't stretch the wait).
     pub fn poll_at(&mut self, now: Instant) -> Option<Done> {

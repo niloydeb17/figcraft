@@ -11,6 +11,7 @@ pub mod image;
 pub mod layout;
 pub mod library;
 pub mod lists;
+pub mod motion;
 pub mod page;
 pub mod props;
 pub mod proto;
@@ -95,6 +96,7 @@ fn registry() -> &'static Registry {
         list.extend(library::specs());
         list.extend(proto::specs());
         list.extend(proto_actions::specs());
+        list.extend(motion::specs());
         list.extend(comment::specs());
         list.extend(crate::vectoredit::specs());
         list.extend(crate::shapebuilder::specs());

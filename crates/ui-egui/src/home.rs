@@ -11,9 +11,9 @@ use serde_json::json;
 
 use crate::FigApp;
 use crate::a11y;
-use crate::i18n::{tr, tr_noop};
+use crate::i18n::{tr, tr_noop, trf};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{ACCENT, BRAND, Tokens, regular, semibold};
 use crate::widgets;
 pub mod home_recents;
 pub mod online;
@@ -30,9 +30,9 @@ pub enum Section {
 impl Section {
     /// The sidebar, top to bottom.
     const ALL: [(Section, Icon, &str); 3] = [
-        (Section::Recents, Icon::Home, tr_noop("Recents")),
+        (Section::Recents, Icon::Recents, tr_noop("Recents")),
         (Section::Online, Icon::Online, tr_noop("Online")),
-        (Section::Templates, Icon::Assets, tr_noop("Templates")),
+        (Section::Templates, Icon::Community, tr_noop("Templates")),
     ];
 
     /// The id `ui.set {homeSection}` and `ui.inspect` use.
@@ -60,25 +60,17 @@ pub struct Home {
     pub kind: Option<Kind>,
     /// The recent files: what is known about each, and the selection.
     pub recents: crate::home_recents::Recents,
+    /// The kind of recent file shown (all when none).
+    pub files_filter: Option<figcraft_doc::FileKind>,
 }
 
 const SIDEBAR: f32 = 240.0;
-const CARD_W: f32 = 248.0;
-const THUMB_H: f32 = 148.0;
-const CARD_H: f32 = THUMB_H + 86.0;
-const GAP: f32 = 20.0;
+/// The bar over the main area: the section's name, and the ways to start a file.
+const TOPBAR_H: f32 = 49.0;
+/// Spacing and size of the cards: as the recent files' (see [`crate::home_recents`]).
+use crate::home_recents::{CARD_MAX, GAP as CARD_GAP};
 /// Templates offered on a first run.
 const FIRST_RUN: usize = 4;
-
-/// The Getting started tips: (title, what to do, the command whose shortcut shows).
-const TIPS: [(&str, &str, &str); 6] = [
-    (tr_noop("Draw a frame"), tr_noop("Pick the Frame tool, then drag on the canvas or choose a device size"), "tool.frame"),
-    (tr_noop("Add auto layout"), tr_noop("Select layers and they space themselves as their content changes"), "layout.add"),
-    (tr_noop("Make a component"), tr_noop("Turn a layer into a component, reuse it, and change every copy at once"), "component.create"),
-    (tr_noop("Prototype"), tr_noop("Link frames on the Prototype tab, then present the flow"), "proto.present"),
-    (tr_noop("Share with a code"), tr_noop("Start sharing with the Share button, then pass on the code it gives"), "collab.share"),
-    (tr_noop("Export"), tr_noop("Export frames and layers as PNG, JPG, SVG or PDF"), "file.export"),
-];
 
 /// A row of the home screen's file lists.
 pub(crate) struct FileRow<'a> {
@@ -147,26 +139,31 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
         ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
         sidebar(app, ui, &t, left);
-        if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
+        let searching = !app.ui.home_view.file_query.trim().is_empty();
+        let title =
+            if searching { tr("Search results") } else { tr(Section::ALL.iter().find(|(s, ..)| *s == app.ui.home_view.section).map_or("", |x| x.2)) };
+        top_bar(app, ui, &t, Rect::from_min_size(pos2(left.max.x, rect.min.y), vec2(rect.width() - SIDEBAR, TOPBAR_H)), title);
+        let main = Rect::from_min_max(pos2(left.max.x, rect.min.y + TOPBAR_H), rect.max);
+        if !searching && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
-            let area = Rect::from_min_max(pos2(left.max.x + 40.0, rect.min.y + 24.0), rect.max - vec2(40.0, 24.0));
+            let area = Rect::from_min_max(pos2(main.min.x + 32.0, main.min.y + 24.0), main.max - vec2(32.0, 24.0));
             crate::online::section(app, ui, area, &t);
             opened_join(app);
             return;
         }
-        let main = Rect::from_min_max(pos2(left.max.x, rect.min.y), rect.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
-                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 24)).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
-                    if app.ui.home_view.file_query.trim().is_empty() {
-                        match app.ui.home_view.section {
-                            Section::Templates => templates(app, ui, &t),
-                            _ => recents(app, ui, &t),
-                        }
-                    } else {
+                ui.spacing_mut().item_spacing = vec2(CARD_GAP, 0.0);
+                if !searching && app.ui.home_view.section != Section::Templates {
+                    recents(app, ui, &t);
+                    return;
+                }
+                padded(ui, 24, |ui| {
+                    if searching {
                         search_results(app, ui, &t);
                         opened_join(app);
+                    } else {
+                        templates(app, ui, &t);
                     }
                 });
             });
@@ -193,17 +190,37 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
 /// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it)
 /// and section tabs; choosing a section clears the file query.
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
-    let mut y = left.min.y + 20.0;
-    crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(left.min.x + 12.0, y - 4.0), vec2(32.0, 32.0)));
-    crate::theme::paint_wordmark(ui.painter(), pos2(left.min.x + 52.0, y + 12.0), 16.0, t);
-    y += 52.0;
-    let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
+    let x = left.min.x;
+    account_header(app, ui, t, Rect::from_min_size(pos2(x + 8.0, left.min.y + 8.0), vec2(SIDEBAR - 52.0, 32.0)));
+    // Notifications: FigCraft has no feed of them, and says so.
+    let bell = Rect::from_min_size(pos2(left.max.x - 40.0, left.min.y + 8.0), vec2(32.0, 32.0));
+    let resp = ui.interact(bell, ui.scope_id().with("home_bell"), Sense::click()).on_hover_text(tr("Notifications"));
+    a11y::button(&resp, tr("Notifications"));
+    if resp.hovered() {
+        ui.painter().rect_filled(bell, CornerRadius::same(5), t.hover);
+    }
+    focus_ring(ui, t, bell, &resp, 5);
+    icons::paint(ui.painter(), Rect::from_center_size(bell.center(), vec2(16.0, 16.0)), Icon::Notifications, t.icon);
+    if resp.clicked() {
+        app.toast(tr("You're all caught up: there are no notifications."));
+    }
+    // The search field: a 32 pt rounded box, the lens inside its left end.
+    let search = Rect::from_min_size(pos2(x + 8.0, left.min.y + 48.0), vec2(SIDEBAR - 16.0, 32.0));
+    ui.painter().rect_filled(search, CornerRadius::same(8), t.field);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(search.min.x + 16.0, search.center().y), vec2(16.0, 16.0)),
+        Icon::Search,
+        t.icon_secondary,
+    );
+    let typing =
+        Rect::from_min_size(pos2(search.min.x + 28.0, search.min.y + (32.0 - widgets::FIELD_H) / 2.0), vec2(search.width() - 32.0, widgets::FIELD_H));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(typing), |ui| {
         let response = widgets::text_input(
             ui,
             Id::unique("home_file_search"),
             &mut app.ui.home_view.file_query,
-            search.width(),
+            typing.width(),
             tr("Search files and templates"),
         );
         a11y::text(&response, tr("Search files and templates"), &app.ui.home_view.file_query);
@@ -211,24 +228,241 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
             app.ui.home_view.file_query.clear();
         }
     });
-    y += widgets::FIELD_H + 12.0;
+    // The sections, then the workspace with its files.
+    let mut y = left.min.y + 88.0;
     for (section, icon, label) in Section::ALL {
-        let r = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, 32.0));
-        let resp = ui.interact(r, ui.scope_id().with(("home_section", label)), Sense::click());
         let current = app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == section;
-        a11y::tab(&resp, tr(label), current);
-        if current || resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
-        }
-        focus_ring(ui, t, r, &resp, 5);
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
-        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
-        if resp.clicked() {
+        if nav_row(ui, t, left, y, icon, t.icon, tr(label), current).clicked() {
             app.ui.home_view.section = section;
             app.ui.home_view.file_query.clear();
         }
-        y += 34.0;
+        y += 32.0;
     }
+    divider(ui, t, left, &mut y);
+    workspace_row(app, ui, t, left, y);
+    y += 36.0;
+    if nav_row(ui, t, left, y, Icon::Drafts, t.icon, tr("Drafts"), false).clicked() {
+        app.toast(tr("Drafts aren't in FigCraft yet: files live on this computer or on a server."));
+    }
+    y += 32.0;
+    if nav_row(ui, t, left, y, Icon::ViewGrid, t.icon, tr("All folders"), false).clicked() {
+        app.open_dialog();
+    }
+    y += 32.0;
+    if nav_row(ui, t, left, y, Icon::Resources, t.icon, tr("Resources"), false).clicked() {
+        app.ui.home_view.section = Section::Templates;
+        app.ui.home_view.file_query.clear();
+    }
+    y += 32.0;
+    if nav_row(ui, t, left, y, Icon::Trash, t.icon, tr("Trash"), false).clicked() {
+        app.toast(tr("There's no trash in FigCraft yet."));
+    }
+    y += 32.0;
+    // The plan card: a bordered button with two lines and a chevron.
+    let card = Rect::from_min_size(pos2(x + 12.0, y + 8.0), vec2(SIDEBAR - 24.0, 58.0));
+    let resp = ui.interact(card, ui.scope_id().with("home_plan"), Sense::click());
+    a11y::button(&resp, tr("See what's included"));
+    ui.painter().rect_filled(card, CornerRadius::same(13), if resp.hovered() { t.hover } else { t.panel });
+    ui.painter().rect_stroke(card, CornerRadius::same(13), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    focus_ring(ui, t, card, &resp, 13);
+    ui.painter().text(pos2(card.min.x + 12.0, card.min.y + 20.0), Align2::LEFT_CENTER, tr("See what's included"), regular(11.0), t.text);
+    ui.painter().text(pos2(card.min.x + 12.0, card.min.y + 38.0), Align2::LEFT_CENTER, tr("Your plan and usage"), regular(11.0), t.text_secondary);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(card.max.x - 20.0, card.center().y), vec2(16.0, 16.0)), Icon::ChevronRight, t.icon);
+    if resp.clicked() {
+        app.toast(tr("Everything in FigCraft is included: it's free and open source."));
+    }
+    y += 74.0;
+    divider(ui, t, left, &mut y);
+    // Starred: its heading, then what is in it.
+    ui.painter().text(pos2(x + 24.0, y + 16.0), Align2::LEFT_CENTER, tr("Starred"), semibold(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 8.0, y + 16.0), vec2(16.0, 16.0)), Icon::Chevron, t.icon_secondary);
+    y += 32.0;
+    if nav_row(ui, t, left, y, Icon::Folder, Color32::from_rgb(0xAF, 0xBC, 0xCF), tr("Team folder"), false).clicked() {
+        app.toast(tr("Starring isn't in FigCraft yet."));
+    }
+    // The upgrade button at the foot.
+    let upgrade = Rect::from_min_size(pos2(x + 16.0, left.max.y - 58.0), vec2(SIDEBAR - 32.0, 32.0));
+    let resp = ui.interact(upgrade, ui.scope_id().with("home_upgrade"), Sense::click());
+    a11y::button(&resp, tr("Upgrade"));
+    ui.painter().rect_filled(upgrade, CornerRadius::same(5), if resp.hovered() { ACCENT } else { BRAND });
+    focus_ring(ui, t, upgrade, &resp, 5);
+    let label_w = ui.painter().layout_no_wrap(tr("Upgrade").to_string(), regular(11.0), Color32::WHITE).size().x;
+    let start = upgrade.center().x - (24.0 + label_w) / 2.0;
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(start + 12.0, upgrade.center().y), vec2(16.0, 16.0)), Icon::Upgrade, Color32::WHITE);
+    ui.painter().text(pos2(start + 24.0, upgrade.center().y), Align2::LEFT_CENTER, tr("Upgrade"), regular(11.0), Color32::WHITE);
+    if resp.clicked() {
+        app.toast(tr("Everything in FigCraft is included: it's free and open source."));
+    }
+}
+
+/// A line across the sidebar with 8 pt over and under it.
+fn divider(ui: &Ui, t: &Tokens, left: Rect, y: &mut f32) {
+    ui.painter().line_segment([pos2(left.min.x, *y + 8.0), pos2(left.max.x, *y + 8.0)], Stroke::new(1.0, t.border));
+    *y += 17.0;
+}
+
+/// A 32 pt sidebar row: the row itself 28 pt and inset 8 pt, a 24 pt slot for the icon (tinted
+/// `tint`) and the label; lit when `current`.
+fn nav_row(ui: &mut Ui, t: &Tokens, left: Rect, y: f32, icon: Icon, tint: Color32, label: &str, current: bool) -> Response {
+    let r = Rect::from_min_size(pos2(left.min.x + 8.0, y + 2.0), vec2(SIDEBAR - 16.0, 28.0));
+    let resp = ui.interact(r, ui.scope_id().with(("home_nav", label)), Sense::click());
+    a11y::tab(&resp, label, current);
+    if current || resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
+    }
+    focus_ring(ui, t, r, &resp, 5);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)), icon, tint);
+    ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+    resp
+}
+
+/// The workspace: its round mark, its name, a chevron, and the plan beside them; choosing it shows
+/// your online files. The plan is the one the onboarding recorded (nothing is billed).
+fn workspace_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect, y: f32) {
+    let (name, plan) = match &app.session.account.account {
+        Some(a) => {
+            let who = if a.name.trim().is_empty() { a.email.split('@').next().unwrap_or_default() } else { a.name.trim() };
+            let plan = match a.profile.plan.as_str() {
+                "professional" => tr("Pro"),
+                "organization" => tr("Org"),
+                _ => tr("Free"),
+            };
+            (trf("{name}'s team", &[("name", &who)]), plan)
+        }
+        None => (tr("Your workspace").to_string(), tr("Free")),
+    };
+    let row = Rect::from_min_size(pos2(left.min.x + 8.0, y + 2.0), vec2(SIDEBAR - 16.0, 32.0));
+    // The button runs from the mark to the chevron; the plan chip follows it.
+    let chip_w = ui.painter().layout_no_wrap(plan.to_string(), regular(11.0), t.text).size().x + 12.0;
+    let button = Rect::from_min_size(row.min, vec2(row.width() - chip_w - 4.0, 32.0));
+    let resp = ui.interact(button, ui.scope_id().with("home_workspace"), Sense::click());
+    a11y::button(&resp, &name);
+    if resp.hovered() {
+        ui.painter().rect_filled(button, CornerRadius::same(4), t.hover);
+    }
+    focus_ring(ui, t, button, &resp, 4);
+    let mark = pos2(button.min.x + 16.0, button.center().y);
+    ui.painter().circle_filled(mark, 8.0, Color32::from_rgb(0xFF, 0x24, 0xBD));
+    let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    ui.painter().text(mark, Align2::CENTER_CENTER, initial, semibold(10.0), Color32::WHITE);
+    let shown = widgets::elide_font(ui, &name, button.width() - 40.0 - 24.0, semibold(13.0));
+    ui.painter().text(pos2(button.min.x + 36.0, button.center().y), Align2::LEFT_CENTER, shown, semibold(13.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(button.max.x - 12.0, button.center().y), vec2(16.0, 16.0)), Icon::Chevron, t.icon);
+    if resp.clicked() {
+        app.ui.home_view.section = Section::Online;
+        app.ui.home_view.file_query.clear();
+    }
+    let chip = Rect::from_min_size(pos2(button.max.x + 4.0, row.center().y - 8.0), vec2(chip_w, 16.0));
+    ui.painter().rect_filled(chip, CornerRadius::same(4), t.selected_row_child);
+    ui.painter().text(chip.center(), Align2::CENTER_CENTER, plan, regular(11.0), ACCENT);
+    ui.interact(chip, ui.scope_id().with("home_plan_chip"), Sense::hover())
+        .on_hover_text(tr("Everything in FigCraft is included: it's free and open source."));
+}
+
+/// The sidebar's first row: who is signed in (their picture, or their initials until it is in, and
+/// their name, with a menu), else the app's own mark and name.
+fn account_header(app: &mut FigApp, ui: &mut Ui, t: &Tokens, r: Rect) {
+    let Some(account) = app.session.account.account.as_ref() else {
+        crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(r.min.x + 4.0, r.min.y + 4.0), vec2(24.0, 24.0)));
+        crate::theme::paint_wordmark(ui.painter(), pos2(r.min.x + 36.0, r.center().y), 15.0, t);
+        return;
+    };
+    let (name, email) = (
+        if account.name.trim().is_empty() {
+            account.email.split('@').next().unwrap_or_default().to_string()
+        } else {
+            account.name.trim().to_string()
+        },
+        account.email.clone(),
+    );
+    let shown = widgets::elide_font(ui, &name, r.width() - 44.0 - 20.0, semibold(13.0));
+    let name_w = ui.painter().layout_no_wrap(shown.clone(), semibold(13.0), t.text).size().x;
+    let button = Rect::from_min_size(r.min, vec2((4.0 + 24.0 + 8.0 + name_w + 4.0 + 16.0 + 4.0).min(r.width()), 32.0));
+    let resp = ui.interact(button, ui.scope_id().with("home_account"), Sense::click()).on_hover_text(&email);
+    a11y::button(&resp, &trf("Account menu for {name}", &[("name", &name)]));
+    if resp.hovered() {
+        ui.painter().rect_filled(button, CornerRadius::same(4), t.hover);
+    }
+    focus_ring(ui, t, button, &resp, 4);
+    let center = pos2(button.min.x + 16.0, button.center().y);
+    match &app.ui.account_picture {
+        Some(picture) => crate::account_picture::paint(ui.painter(), center, 12.0, picture, t.border),
+        None => crate::live::avatar(ui.painter(), center, 12.0, &name, ACCENT),
+    }
+    ui.painter().text(pos2(button.min.x + 36.0, button.center().y), Align2::LEFT_CENTER, shown, semibold(13.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(button.max.x - 12.0, button.center().y), vec2(16.0, 16.0)), Icon::Chevron, t.icon);
+    crate::right::menu_popup(&resp).show(|ui| {
+        if crate::right::menu_item(ui, &email, "") {
+            ui.close();
+        }
+        ui.separator();
+        if crate::right::menu_item(ui, tr("Preferences…"), "") {
+            app.ui.preferences = true;
+            ui.close();
+        }
+        if crate::right::menu_item(ui, tr("Keyboard shortcuts"), "") {
+            app.ui.shortcuts_panel = true;
+            ui.close();
+        }
+        if crate::right::menu_item(ui, tr("About FigCraft"), "") {
+            app.ui.about = true;
+            ui.close();
+        }
+    });
+}
+
+/// The bar over the main area: the section's name on the left; on the right the ways to start a
+/// file as pills (their marks alone when the window is narrow), each saying what it does on hover.
+fn top_bar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, bar: Rect, title: &str) {
+    let title_end = ui.painter().text(pos2(bar.min.x + 32.0, bar.center().y), Align2::LEFT_CENTER, title, regular(13.0), t.text).max.x;
+    let pills = [
+        (Icon::PenNib, tr("New design file"), tr("Start from a blank canvas"), BRAND),
+        (Icon::Board, tr("New board"), tr("Sticky notes, shapes and connectors"), Color32::from_rgb(0x97, 0x47, 0xFF)),
+        (Icon::Page, tr("Open file"), tr("Open .figcraft, .svg or images"), Color32::from_rgb(0x2C, 0x2C, 0x2C)),
+    ];
+    let text_w = |label: &str| ui.painter().layout_no_wrap(label.to_string(), regular(11.0), t.text).size().x;
+    // 16 pt each side, the 16 pt mark, 8 pt, the label.
+    let full: Vec<f32> = pills.iter().map(|(_, label, ..)| 16.0 + 16.0 + 8.0 + text_w(label).ceil() + 16.0).collect();
+    let spread = |w: &[f32]| w.iter().sum::<f32>() + 8.0 * (w.len() as f32 - 1.0);
+    let marks_only = bar.max.x - 32.0 - spread(&full) < title_end + 24.0;
+    let widths: Vec<f32> = if marks_only { vec![32.0; pills.len()] } else { full };
+    let mut x = bar.max.x - 32.0 - spread(&widths);
+    let mut chosen = None;
+    for (i, ((icon, label, sub, mark), w)) in pills.into_iter().zip(widths).enumerate() {
+        let r = Rect::from_min_size(pos2(x, bar.min.y + 8.0), vec2(w, 32.0));
+        x += w + 8.0;
+        let resp = ui.interact(r, ui.scope_id().with(("home_start", i)), Sense::click()).on_hover_text(if marks_only {
+            format!("{label}\n{sub}")
+        } else {
+            sub.to_string()
+        });
+        a11y::button(&resp, label);
+        ui.painter().rect_filled(r, CornerRadius::same(16), if resp.hovered() { t.pressed } else { t.field });
+        ui.painter().rect_stroke(r, CornerRadius::same(16), Stroke::new(1.0, t.border), StrokeKind::Inside);
+        focus_ring(ui, t, r, &resp, 16);
+        let tile = Rect::from_min_size(pos2(if marks_only { r.center().x - 8.0 } else { r.min.x + 16.0 }, r.center().y - 8.0), vec2(16.0, 16.0));
+        ui.painter().rect_filled(tile, CornerRadius::same(2), mark);
+        icons::paint(ui.painter(), tile.shrink(2.0), icon, Color32::WHITE);
+        if !marks_only {
+            ui.painter().text(pos2(tile.max.x + 8.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+        }
+        if resp.clicked() {
+            chosen = Some(i);
+        }
+    }
+    match chosen {
+        Some(0 | 1) => {
+            app.run(if chosen == Some(1) { "file.newBoard" } else { "file.new" }, json!({}));
+            app.ui.home = false;
+        }
+        Some(_) => app.open_dialog(),
+        None => {}
+    }
+}
+
+/// `content` in the main area's margin: 32 pt at the sides and `top` over it.
+fn padded(ui: &mut Ui, top: i8, content: impl FnOnce(&mut Ui)) {
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 32, right: 32, top, bottom: 24 }).show(ui, content);
 }
 
 fn file_matches(name: &str, location: &str, query: &str) -> bool {
@@ -238,7 +472,6 @@ fn file_matches(name: &str, location: &str, query: &str) -> bool {
 /// One search over known files and starter templates. It never sends a query or owner token to a
 /// server; online files are opened through their existing owner-token command only on click.
 fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    heading(ui, t, tr("Search results"));
     let query = app.ui.home_view.file_query.trim().to_lowercase();
     let mut count = open_files(app, ui, t, &query);
     count += crate::home_recents::section(app, ui, t, &query);
@@ -291,82 +524,45 @@ fn focus_ring(ui: &Ui, t: &Tokens, rect: Rect, resp: &Response, radius: u8) {
     }
 }
 
-/// A card's background and border (lit on hover, ringed with the keyboard on it).
-fn card_frame(ui: &Ui, t: &Tokens, rect: Rect, resp: &Response) {
-    ui.painter().rect_filled(rect, CornerRadius::same(8), if resp.hovered() { t.hover } else { t.panel });
-    ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, t.border), StrokeKind::Inside);
-    focus_ring(ui, t, rect, resp, 8);
-}
-
-fn heading(ui: &mut Ui, t: &Tokens, text: &str) {
-    ui.label(egui::RichText::new(text).font(semibold(18.0)).color(t.text));
-    ui.add_space(24.0);
-}
-
 fn subheading(ui: &mut Ui, t: &Tokens, text: &str) {
     ui.add_space(28.0);
     ui.label(egui::RichText::new(text).font(semibold(12.0)).color(t.text_secondary));
     ui.add_space(12.0);
 }
 
-/// A card with an icon tile, a title and a line under it; true when chosen.
-fn action_card(ui: &mut Ui, t: &Tokens, icon: Icon, title: &str, sub: &str) -> bool {
-    let (r, mut resp) = ui.allocate_exact_size(vec2(260.0, 72.0), Sense::click());
-    a11y::button(&resp, title);
-    // One line each inside the card; a long translation ends with an ellipsis, in full on hover.
-    let text_w = r.width() - 72.0;
-    let (title_shown, sub_shown) = (widgets::elide_font(ui, title, text_w, semibold(12.0)), widgets::elide(ui, sub, text_w));
-    if title_shown != title || sub_shown != sub {
-        resp = resp.on_hover_text(format!("{title}\n{sub}"));
-    }
-    card_frame(ui, t, r, &resp);
-    let ir = Rect::from_min_size(pos2(r.min.x + 16.0, r.center().y - 16.0), vec2(32.0, 32.0));
-    ui.painter().rect_filled(ir, CornerRadius::same(6), t.accent);
-    icons::paint(ui.painter(), ir.shrink(8.0), icon, t.accent_on);
-    ui.painter().text(pos2(r.min.x + 60.0, r.center().y - 8.0), Align2::LEFT_CENTER, title_shown, semibold(12.0), t.text);
-    ui.painter().text(pos2(r.min.x + 60.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub_shown, regular(11.0), t.text_secondary);
-    resp.clicked()
+fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
+    padded(ui, 0, |ui| recents_body(app, ui, t));
 }
 
-fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    heading(ui, t, tr("Recents"));
-    let (mut new_file, mut new_board, mut open) = (false, false, false);
-    ui.horizontal_wrapped(|ui| {
-        new_file = action_card(ui, t, Icon::PenNib, tr("New design file"), tr("Start from a blank canvas"));
-        new_board = action_card(ui, t, Icon::Board, tr("New board"), tr("Sticky notes, shapes and connectors"));
-        open = action_card(ui, t, Icon::Page, tr("Open file"), tr("Open .figcraft, .svg or images"));
-    });
-    if new_file || new_board {
-        app.run(if new_board { "file.newBoard" } else { "file.new" }, json!({}));
-        app.ui.home = false;
-    }
-    if open {
-        app.open_dialog();
-    }
-    // Join a file someone shared (the Join dialog shows what the join is doing).
-    subheading(ui, t, tr("Join with a code"));
-    ui.scope(|ui| {
-        ui.set_max_width(540.0);
-        crate::live::join_row(app, ui, 260.0);
-    });
-    opened_join(app);
-    if !app.session.prefs.getting_started_dismissed {
-        ui.add_space(28.0);
-        getting_started(app, ui, t);
-    }
+fn recents_body(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     open_files(app, ui, t, "");
     if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() {
         // A first run: nothing to reopen yet, so offer something to start from.
-        subheading(ui, t, tr("Start from a template"));
-        let shown: Vec<&Template> = TEMPLATES.iter().take(FIRST_RUN).collect();
-        template_grid(app, ui, t, &shown);
-        ui.add_space(12.0);
-        if widgets::button(ui, tr("See all templates"), false, true).clicked() {
+        crate::home_recents::first_run_row(app, ui, t);
+        if template_header(ui, t, tr("Start from a template"), tr("See all templates")) {
             app.ui.home_view.section = Section::Templates;
         }
+        let shown: Vec<&Template> = TEMPLATES.iter().take(FIRST_RUN).collect();
+        template_grid(app, ui, t, &shown);
         return;
     }
     crate::home_recents::section(app, ui, t, "");
+}
+
+/// The line over the template cards of a first run: what they are, and a button for all of them;
+/// true when that is clicked.
+fn template_header(ui: &mut Ui, t: &Tokens, label: &str, action: &str) -> bool {
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+    ui.painter().text(pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, label, semibold(12.0), t.text_secondary);
+    let w = ui.painter().layout_no_wrap(action.to_string(), regular(11.0), t.text).size().x.ceil() + 24.0;
+    let button = Rect::from_min_size(pos2(row.max.x - w, row.center().y - 12.0), vec2(w, 24.0));
+    let resp = ui.interact(button, ui.scope_id().with(("home_template_header", action)), Sense::click());
+    a11y::button(&resp, action);
+    ui.painter().rect_filled(button, CornerRadius::same(5), if resp.hovered() { t.hover } else { t.panel });
+    ui.painter().rect_stroke(button, CornerRadius::same(5), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    focus_ring(ui, t, button, &resp, 5);
+    ui.painter().text(button.center(), Align2::CENTER_CENTER, action, regular(11.0), t.text);
+    resp.clicked()
 }
 
 /// The Open files list: the documents whose name or path has `query` (lower case; all for ""), a
@@ -413,58 +609,6 @@ fn opened_join(app: &mut FigApp) {
     }
 }
 
-/// The Getting started card: short tips with their shortcuts as the keymap has them now, and a
-/// button that puts the card away (Help ▸ Getting started brings it back).
-fn getting_started(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    let width = ui.available_width().min(3.0 * CARD_W + 2.0 * GAP);
-    let columns = if width >= 720.0 { 3 } else { 1 };
-    let (cell_w, cell_h) = ((width - 32.0) / columns as f32, 62.0);
-    let rows = TIPS.len().div_ceil(columns);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 52.0 + rows as f32 * cell_h + 8.0), Sense::hover());
-    a11y::container_bounds(ui, rect);
-    ui.painter().rect_filled(rect, CornerRadius::same(8), t.field);
-    ui.painter().text(rect.min + vec2(16.0, 24.0), Align2::LEFT_CENTER, tr("Getting started"), semibold(13.0), t.text);
-    let close = Rect::from_min_size(pos2(rect.max.x - 36.0, rect.min.y + 12.0), vec2(24.0, 24.0));
-    if widgets::icon_button_at(
-        ui,
-        ui.scope_id().with("tips_close"),
-        close,
-        Icon::Close,
-        tr("Hide these tips (Getting started in the Help menu shows them again)"),
-    ) {
-        app.run("help.gettingStarted", json!({"show": false}));
-        app.services.save_prefs(&app.session.prefs);
-    }
-    for (i, (title, line, command)) in TIPS.into_iter().enumerate() {
-        let cell = Rect::from_min_size(
-            rect.min + vec2(16.0 + (i % columns) as f32 * cell_w, 48.0 + (i / columns) as f32 * cell_h),
-            vec2(cell_w - 16.0, cell_h),
-        );
-        let badge = Rect::from_min_size(cell.min + vec2(0.0, 2.0), vec2(20.0, 20.0));
-        ui.painter().rect_filled(badge, CornerRadius::same(10), t.panel);
-        ui.painter().text(badge.center(), Align2::CENTER_CENTER, (i + 1).to_string(), semibold(10.0), t.text_secondary);
-        let x = cell.min.x + 30.0;
-        let title_end = ui.painter().text(pos2(x, cell.min.y + 12.0), Align2::LEFT_CENTER, tr(title), semibold(12.0), t.text).max.x;
-        if let Some(key) = shortcut(command) {
-            ui.painter().text(pos2(title_end + 8.0, cell.min.y + 12.0), Align2::LEFT_CENTER, key, regular(11.0), t.text_tertiary);
-        }
-        let galley = lines(ui, tr(line), regular(11.0), t.text_secondary, cell.max.x - x, 2);
-        ui.painter().galley(pos2(x, cell.min.y + 24.0), galley, t.text_secondary);
-    }
-}
-
-/// A command's shortcut as this platform writes it, as the keymap has it now.
-pub(crate) fn shortcut(command: &str) -> Option<String> {
-    crate::shortcuts::shortcut(command).map(|key| figcraft_engine::keymap::display(key, crate::shortcuts::platform()))
-}
-
-/// `text` wrapped at `width`, at most `rows` lines (the last one ends with an ellipsis).
-fn lines(ui: &Ui, text: &str, font: egui::FontId, color: Color32, width: f32, rows: usize) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, width.max(1.0));
-    job.wrap.max_rows = rows;
-    ui.fonts_mut(|f| f.layout_job(job))
-}
-
 fn matches(template: &Template, query: &str, kind: Option<Kind>) -> bool {
     let q = query.trim().to_lowercase();
     let has = |s: &str| s.to_lowercase().contains(&q);
@@ -477,7 +621,6 @@ fn matches(template: &Template, query: &str, kind: Option<Kind>) -> bool {
 /// Draw template search and kind filter, show no-match guidance and a "Show all templates"
 /// button that clears the query and kind, and lay matching templates out in a grid.
 fn templates(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    heading(ui, t, tr("Templates"));
     ui.horizontal(|ui| {
         let search = widgets::text_input(ui, Id::unique("home_template_search"), &mut app.ui.home_view.query, 260.0, tr("Search templates"));
         a11y::text(&search, tr("Search templates"), &app.ui.home_view.query);
@@ -508,32 +651,34 @@ fn templates(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     template_grid(app, ui, t, &shown);
 }
 
-/// Template cards in as many columns as fit; choosing one opens a new document made from it.
+/// Template cards in as many columns as fit (the recent files' cards: a 16:9 picture over a 60 pt
+/// footer with a mark, the name and what it is); choosing one opens a new document made from it.
 fn template_grid(app: &mut FigApp, ui: &mut Ui, t: &Tokens, list: &[&Template]) {
-    let columns = (((ui.available_width() + GAP) / (CARD_W + GAP)).floor() as usize).max(1);
+    let (columns, card_w) = crate::home_recents::grid_columns(ui.available_width());
+    let (picture_h, card_h) = crate::home_recents::card_heights(card_w);
     let dark = ui.visuals().dark_mode;
     let mut thumbs: Thumbs = ui.data(|d| d.get_temp(Id::unique("template_thumbs"))).unwrap_or_default();
     let mut chosen = None;
     let mut rendered = false;
     for row in list.chunks(columns) {
-        ui.horizontal(|ui| {
-            for template in row {
-                let key = (template.id, dark);
-                if !thumbs.0.contains_key(&key) && ui.is_rect_visible(Rect::from_min_size(ui.cursor().min, vec2(CARD_W, CARD_H))) {
-                    if rendered {
-                        // One a frame keeps the screen moving; the rest follow.
-                        ui.ctx().request_repaint();
-                    } else {
-                        thumbs.0.insert(key, thumbnail(ui.ctx(), template, app.session.new_page_background()));
-                        rendered = true;
-                    }
-                }
-                if template_card(ui, t, template, thumbs.0.get(&key).and_then(Option::as_ref)) {
-                    chosen = Some(*template);
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), card_h), Sense::hover());
+        for (i, template) in row.iter().enumerate() {
+            let rect = Rect::from_min_size(pos2(r.min.x + i as f32 * (card_w + CARD_GAP), r.min.y), vec2(card_w, card_h));
+            let key = (template.id, dark);
+            if !thumbs.0.contains_key(&key) && ui.is_rect_visible(rect) {
+                if rendered {
+                    // One a frame keeps the screen moving; the rest follow.
+                    ui.ctx().request_repaint();
+                } else {
+                    thumbs.0.insert(key, thumbnail(ui.ctx(), template, app.session.new_page_background()));
+                    rendered = true;
                 }
             }
-        });
-        ui.add_space(GAP);
+            if template_card(ui, t, rect, picture_h, template, thumbs.0.get(&key).and_then(Option::as_ref)) {
+                chosen = Some(*template);
+            }
+        }
+        ui.add_space(CARD_GAP);
     }
     ui.data_mut(|d| d.insert_temp(Id::unique("template_thumbs"), thumbs));
     if let Some(template) = chosen
@@ -543,35 +688,41 @@ fn template_grid(app: &mut FigApp, ui: &mut Ui, t: &Tokens, list: &[&Template]) 
     }
 }
 
-fn template_card(ui: &mut Ui, t: &Tokens, template: &Template, thumb: Option<&Thumb>) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click());
+fn template_card(ui: &mut Ui, t: &Tokens, rect: Rect, picture_h: f32, template: &Template, thumb: Option<&Thumb>) -> bool {
+    let resp = ui.interact(rect, ui.scope_id().with(("template_card", template.id)), Sense::click());
     let (name, description) = (tr(template.name), tr(template.description));
     a11y::button(&resp, &format!("{name}: {description}"));
-    card_frame(ui, t, r, &resp);
-    let picture = Rect::from_min_size(r.min, vec2(CARD_W, THUMB_H)).shrink(1.0);
-    let top = CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 };
+    let resp = resp.on_hover_text(format!("{name}\n{description}"));
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(13), t.panel);
+    let area = Rect::from_min_size(rect.min, vec2(rect.width(), picture_h)).shrink(1.0);
+    let top = CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 };
     match thumb {
         Some(thumb) => {
-            ui.painter().rect_filled(picture, top, thumb.page);
+            p.rect_filled(area, top, thumb.page);
             let size = thumb.texture.size_vec2();
-            let inner = picture.shrink(10.0);
-            let fit = (inner.width() / size.x).min(inner.height() / size.y);
+            let inner = area.shrink(area.height() * 0.05);
+            let fit = (inner.width() / size.x.max(1.0)).min(inner.height() / size.y.max(1.0));
             let image = Rect::from_center_size(inner.center(), size * fit);
-            ui.painter().image(thumb.texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            p.image(thumb.texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         None => {
-            ui.painter().rect_filled(picture, top, t.field);
-            icons::paint(ui.painter(), Rect::from_center_size(picture.center(), vec2(20.0, 20.0)), Icon::Frame, t.icon_secondary);
+            p.rect_filled(area, top, t.field);
+            icons::paint(p, Rect::from_center_size(area.center(), vec2(20.0, 20.0)), Icon::Frame, t.icon_secondary);
         }
     }
-    ui.painter().line_segment([picture.left_bottom(), picture.right_bottom()], Stroke::new(1.0, t.border));
-    let (x, w) = (r.min.x + 14.0, CARD_W - 28.0);
-    let y = picture.max.y + 20.0;
-    ui.painter().text(pos2(x, y), Align2::LEFT_CENTER, widgets::elide_font(ui, name, w, semibold(12.0)), semibold(12.0), t.text);
-    let galley = lines(ui, description, regular(11.0), t.text_secondary, w, 2);
-    ui.painter().galley(pos2(x, y + 11.0), galley, t.text_secondary);
+    p.line_segment([pos2(rect.min.x, area.max.y + 0.5), pos2(rect.max.x, area.max.y + 0.5)], Stroke::new(1.0, t.border));
+    // The footer: 16 pt in, a 16 pt design-file mark, 12 pt, then the name and what it is.
+    let footer = area.max.y + 1.0;
+    let mark = Rect::from_center_size(pos2(rect.min.x + 24.0, footer + 30.0), vec2(16.0, 16.0));
+    p.rect_filled(mark, CornerRadius::same(4), t.accent);
+    icons::paint(p, mark.shrink(3.0), Icon::PenNib, t.accent_on);
+    let (x, w) = (rect.min.x + 44.0, rect.width() - 60.0);
+    p.text(pos2(x, footer + 20.0), Align2::LEFT_CENTER, widgets::elide_font(ui, name, w, semibold(11.0)), semibold(11.0), t.text);
     let tag = format!("{} · {}", tr(template.kind.label()), template.size);
-    ui.painter().text(pos2(x, r.max.y - 15.0), Align2::LEFT_CENTER, widgets::elide_font(ui, &tag, w, regular(10.0)), regular(10.0), t.text_tertiary);
+    p.text(pos2(x, footer + 38.0), Align2::LEFT_CENTER, widgets::elide_font(ui, &tag, w, regular(11.0)), regular(11.0), t.text_secondary);
+    p.rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, if resp.hovered() { t.border_strong } else { t.border }), StrokeKind::Inside);
+    focus_ring(ui, t, rect, &resp, 13);
     resp.clicked()
 }
 
@@ -595,7 +746,7 @@ fn thumbnail(ctx: &egui::Context, template: &Template, background: figcraft_colo
         return None;
     }
     // A page much taller than a card shows its top, as wide as the card.
-    let (w, h) = (f64::from(CARD_W - 22.0), f64::from(THUMB_H - 22.0));
+    let (w, h) = (f64::from(CARD_MAX - 20.0), f64::from((CARD_MAX * 9.0 / 16.0).round() - 20.0));
     let area = figcraft_geom::Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1.min(bounds.y0 + bounds.width() * h / w * 1.5));
     let scale = (w / area.width()).min(h / area.height()) * f64::from(ctx.pixels_per_point());
     let pix = figcraft_render::render_area(&doc, &frames, area, scale.min(1.0))?;

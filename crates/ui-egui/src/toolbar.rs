@@ -753,7 +753,8 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
     }
 }
 
-/// Mode `i` of the switcher chosen.
+/// Mode `i` of the switcher chosen. The Prototype mode also brings up the motion timeline under
+/// the canvas; the other modes put it away.
 fn pick_mode(app: &mut FigApp, i: usize) {
     match i {
         0 => {
@@ -776,6 +777,10 @@ fn pick_mode(app: &mut FigApp, i: usize) {
                 app.run("tool.set", json!({"tool": "move"}));
             }
         }
+    }
+    let prototype = i == 2;
+    if app.session.ds().is_ok_and(|d| d.motion.panel != prototype) {
+        app.run("view.motionTimeline", json!({"show": prototype}));
     }
 }
 
@@ -1259,6 +1264,23 @@ mod tests {
         for (_, name, bytes, [w, h]) in DRAW_TOOLS {
             let img = image::load_from_memory(bytes).unwrap();
             assert_eq!((img.width() as f32, img.height() as f32), (w * 4.0, h * 4.0), "{name}");
+        }
+    }
+
+    /// The Prototype mode opens the motion timeline under the canvas, and the other modes close it.
+    #[test]
+    fn prototype_mode_shows_the_motion_timeline() {
+        let mut app = FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
+        let shown = |app: &FigApp| app.session.ds().is_ok_and(|d| d.motion.panel);
+        assert!(!shown(&app));
+        pick_mode(&mut app, 2);
+        assert!(shown(&app) && app.ui.right_tab == crate::RightTab::Prototype);
+        pick_mode(&mut app, 2);
+        assert!(shown(&app), "picking it again keeps it open");
+        for i in [0, 1, 3] {
+            pick_mode(&mut app, 2);
+            pick_mode(&mut app, i);
+            assert!(!shown(&app), "mode {i} puts the timeline away");
         }
     }
 

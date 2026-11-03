@@ -16,21 +16,32 @@ pub struct Account {
     asked: bool,
     /// `account.set` parameters that arrived since the last frame.
     arrived: Rc<RefCell<Vec<Value>>>,
+    /// The picture's bytes, when they arrived since the last frame.
+    picture: Rc<RefCell<Option<Vec<u8>>>>,
 }
 
 impl Account {
     pub fn tick(&mut self, fig: &mut FigApp, ctx: &egui::Context) {
         if !self.asked {
             self.asked = true;
-            let (arrived, ctx) = (self.arrived.clone(), ctx.clone());
+            let (arrived, picture, ctx) = (self.arrived.clone(), self.picture.clone(), ctx.clone());
             spawn_local(async move {
-                if let Some((status, body)) = fetch("GET", "/auth/me", None).await
-                    && let Some(p) = crate::account_me::params(status, &body)
-                {
+                let Some((status, body)) = fetch("GET", "/auth/me", None).await else { return };
+                if let Some(p) = crate::account_me::params(status, &body) {
                     arrived.borrow_mut().push(p);
                     ctx.request_repaint();
                 }
+                // The server keeps Google's picture for the account and hands it over itself.
+                if crate::account_me::has_picture(status, &body)
+                    && let Some(bytes) = fetch_bytes("/auth/avatar").await
+                {
+                    *picture.borrow_mut() = Some(bytes);
+                    ctx.request_repaint();
+                }
             });
+        }
+        if let Some(bytes) = self.picture.borrow_mut().take() {
+            fig.set_account_picture(ctx, &bytes);
         }
         let arrived: Vec<Value> = std::mem::take(&mut *self.arrived.borrow_mut());
         for p in arrived {
@@ -68,4 +79,16 @@ async fn fetch(method: &str, path: &str, body: Option<String>) -> Option<(u16, S
     let status = resp.status();
     let text = JsFuture::from(resp.text().ok()?).await.ok()?.as_string().unwrap_or_default();
     Some((status, text))
+}
+
+/// One same-origin GET's body when it is a 200.
+async fn fetch_bytes(path: &str) -> Option<Vec<u8>> {
+    let window = web_sys::window()?;
+    let resp = JsFuture::from(window.fetch_with_str(path)).await.ok()?;
+    let resp: web_sys::Response = resp.dyn_into().ok()?;
+    if resp.status() != 200 {
+        return None;
+    }
+    let buffer = JsFuture::from(resp.array_buffer().ok()?).await.ok()?;
+    Some(js_sys::Uint8Array::new(&buffer).to_vec())
 }

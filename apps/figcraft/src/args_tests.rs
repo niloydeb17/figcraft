@@ -72,3 +72,10 @@ fn file_urls_are_paths() {
         assert_eq!(file_url_path(bad), None, "{bad}");
     }
 }
+
+#[test]
+fn screenshot_takes_a_path() {
+    assert_eq!(parse(&args(&["--screenshot", "shot.png"])).screenshot.as_deref(), Some("shot.png"));
+    assert_eq!(parse(&args(&["--screenshot=a.png", "f.figcraft"])).screenshot.as_deref(), Some("a.png"));
+    assert_eq!(parse(&args(&["--screenshot"])).screenshot, None);
+}

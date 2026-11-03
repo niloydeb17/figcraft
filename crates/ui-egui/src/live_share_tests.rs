@@ -478,12 +478,13 @@ fn the_join_field_takes_a_code_or_a_link_and_enter_joins() {
 }
 
 #[test]
-fn the_home_screen_joins_with_a_code_and_opens_the_file() {
+fn joining_from_the_home_screen_opens_the_file() {
     let (mut h, script) = harness();
     h.app.ui.home = true;
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Join with a code") && has_text(&shapes, "Code or invite link") && has_text(&shapes, "Join"));
-    click(&mut h, &shapes, "Code or invite link");
+    assert!(!has_text(&shapes, "Join with a code"), "the home screen has no join row: the Join dialog does it");
+    crate::menus::invoke(&mut h.app, "collab.join");
+    h.frames(2);
     type_text(&mut h, "K7M-2QX-9TD");
     key(&mut h, Key::Enter);
     assert_eq!(script.lock().unwrap().joined, ["figcraft://join?server=wss://share.example/&code=K7M2QX9TD"]);
@@ -494,9 +495,7 @@ fn the_home_screen_joins_with_a_code_and_opens_the_file() {
     let shapes = h.frames(3);
     assert!(has_text(&shapes, "That code has expired or its sharing was stopped") && h.app.ui.home);
     // Again, and it works: the shared file's tab comes to the front.
-    h.app.ui.live.code = "K7M-2QX-9TD".into();
-    let shapes = h.frames(1);
-    click(&mut h, &shapes, "Join");
+    click(&mut h, &shapes, "Try again");
     assert_eq!(script.lock().unwrap().joined.len(), 2);
     script.lock().unwrap().events.push(LiveEvent::Welcome { info: info(Role::Guest, PLAIN), peers: vec![] });
     h.frames(2);

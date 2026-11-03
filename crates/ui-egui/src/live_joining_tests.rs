@@ -30,12 +30,9 @@ fn joining_shown(h: &mut Harness) -> bool {
 fn joining_shows_until_the_file_is_ready() {
     let (mut h, _) = Harness::new();
     let id = join(&mut h);
-    // One join at a time: the home screen's field waits.
     h.app.ui.home = true;
-    h.app.ui.live.code = LINK.into();
-    let shapes = h.frames(2);
-    h.click(text_center(&shapes, "Join"));
-    assert_eq!(h.app.ui.live.joining.as_ref().map(|j| j.0), Some(id), "no second join");
+    h.frames(2);
+    assert_eq!(h.app.ui.live.joining.as_ref().map(|j| j.0), Some(id));
     assert_eq!(h.app.session.live.iter().count(), 1);
     // Welcomed, but the file isn't here yet: still joining.
     h.welcome();

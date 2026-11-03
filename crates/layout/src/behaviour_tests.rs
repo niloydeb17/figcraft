@@ -319,11 +319,10 @@ fn padding_and_stroke_rules() {
             rects: &[],
         },
         Case {
-            rule: "an empty hugging frame is its padding plus its included inside stroke",
-            // 8 + 2 on each side → 20 × 20.
+            rule: "an empty hugging frame retains its size, bounded by padding and its included inside stroke",
             frame: Frame { sizing: (Hug, Hug), pad: [8.0; 4], stroke: Some((2.0, StrokeAlign::Inside, None)), ..FRAME },
             kids: &[],
-            want: (20.0, 20.0),
+            want: (100.0, 100.0),
             rects: &[],
         },
         Case {

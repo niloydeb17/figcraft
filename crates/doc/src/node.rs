@@ -559,6 +559,9 @@ pub struct Node {
     /// On a board: what this object is (a sticky note, a connector, a stamp…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<crate::BoardItem>,
+    /// Motion: keyframe tracks, and on a top-level frame its timeline's length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<Box<crate::motion::Motion>>,
 }
 
 pub(crate) fn yes() -> bool {
@@ -742,6 +745,7 @@ impl Node {
             dev_resources: Vec::new(),
             measurements: Vec::new(),
             board: None,
+            motion: None,
         }
     }
 

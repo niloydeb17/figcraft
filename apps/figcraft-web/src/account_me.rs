@@ -25,3 +25,8 @@ pub fn params(status: u16, body: &str) -> Option<Value> {
         "profile": user.get("profile").cloned().unwrap_or_else(|| json!({})),
     }))
 }
+
+/// Whether an `/auth/me` answer says the account has a picture to fetch (`GET /auth/avatar`).
+pub fn has_picture(status: u16, body: &str) -> bool {
+    status == 200 && serde_json::from_str::<Value>(body).ok().and_then(|me| me.get("user")?.get("hasPicture")?.as_bool()).unwrap_or(false)
+}

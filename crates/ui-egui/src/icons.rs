@@ -273,6 +273,31 @@ icons! {
     Vote,
     /// A measurement: a dimension line with arrowheads between two end ticks.
     Measure,
+    /// The home screen's sidebar (UI3 kit glyphs only): a clock, a community mark, a draft page,
+    /// a layout of resources, a bin, a team folder and an arrow up in a circle.
+    Notifications,
+    Recents,
+    Community,
+    Drafts,
+    Resources,
+    Trash,
+    Folder,
+    Upgrade,
+    /// The colour picker's contrast check (UI3 kit glyph only).
+    Contrast,
+    /// The colour picker's paint kinds, source, tile and gradient tools (UI3 kit glyphs only).
+    PaintSolid,
+    PaintGradient,
+    PaintPattern,
+    PaintImage,
+    PaintVideo,
+    PaintNoise,
+    SelectSource,
+    TileGrid,
+    TileHex,
+    TileHexVertical,
+    FlipGradient,
+    RotateGradient,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).

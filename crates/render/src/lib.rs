@@ -78,6 +78,9 @@ pub struct Options {
     pub skip: Vec<NodeId>,
     /// Draw only this layer of the page, where it is (Dev Mode's focus view).
     pub solo: Option<NodeId>,
+    /// Draw only these layers of the page, where they are, over nothing (no background): layers
+    /// lifted off the canvas while they're dragged, which the canvas then slides over the rest.
+    pub lifted: Vec<NodeId>,
     /// A preview (the canvas): when zoomed out, approximate what's too small on screen to see in
     /// detail, see [`lod`]; at any zoom, draw a large image shown smaller than its pixels from a
     /// smaller copy (see [`images::shown`]). Off for everything that must be exact (exports,
@@ -229,7 +232,7 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
         Some(NodeKind::Page { background, .. }) => Some(*background),
         _ => None,
     });
-    if let Some(bg) = bg {
+    if let Some(bg) = bg.filter(|_| opts.lifted.is_empty()) {
         pix.fill(paint::ts_color(bg));
         if let Some(d) = &opts.dots {
             dots::draw(&mut pix, view, d);
@@ -253,6 +256,12 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
     };
     let xf = view.transform();
     let Some(p) = doc.node(page) else { return Some(pix) };
+    if !opts.lifted.is_empty() {
+        for id in opts.lifted.iter().filter(|id| **id != page && doc.page_of(**id) == Some(page)) {
+            draw::draw_node(&ctx, &mut pix, *id, xf * parent_transform(doc, *id), 0);
+        }
+        return Some(pix);
+    }
     match opts.solo.filter(|id| *id != page && doc.page_of(*id) == Some(page)) {
         Some(id) => draw::draw_node(&ctx, &mut pix, id, xf * parent_transform(doc, id), 0),
         None => {

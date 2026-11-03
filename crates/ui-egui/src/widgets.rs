@@ -422,8 +422,22 @@ fn number_field_impl(
                 None => empty.text().to_string(),
             };
             let col = if value.is_some() { t.text } else { t.text_secondary };
-            // A value too long for its room ends in "…", so a cut number never reads as another.
-            crate::bidi::paint_name(ui.painter(), pos2(edit_rect.min.x, rect.center().y), &s, regular(11.0), col, edit_rect.width());
+            // A percentage's sign can sit dim at the field's right end (the colour picker's alpha).
+            let dim_unit = value.is_some() && suffix == "%" && ui.data(|d| d.get_temp::<bool>(Id::unique("dim_percent"))).unwrap_or(false);
+            if let (true, Some(v)) = (dim_unit, value) {
+                crate::bidi::paint_name(
+                    ui.painter(),
+                    pos2(edit_rect.min.x, rect.center().y),
+                    &fmt_num(v),
+                    regular(11.0),
+                    col,
+                    edit_rect.width() - 14.0,
+                );
+                ui.painter().text(pos2(rect.max.x - 7.0, rect.center().y), Align2::CENTER_CENTER, "%", regular(11.0), t.text_secondary);
+            } else {
+                // A value too long for its room ends in "…", so a cut number never reads as another.
+                crate::bidi::paint_name(ui.painter(), pos2(edit_rect.min.x, rect.center().y), &s, regular(11.0), col, edit_rect.width());
+            }
         }
     }
     // The variable button shows while the pointer is over a bindable field.

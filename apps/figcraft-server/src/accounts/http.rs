@@ -6,7 +6,8 @@
 //! | `GET /login` | the sign-in page, or the signed-in account (`?next=/path` goes there instead) |
 //! | `POST /login` | `email`, `password`, `next`: signs in, or makes the account when there is none |
 //! | `POST /logout` | signs this browser out |
-//! | `GET /auth/me` | `{"signedIn": true, "user": {id, email, name}}`, or 401 |
+//! | `GET /auth/me` | `{"signedIn": true, "user": {id, email, name, hasPicture}}`, or 401 |
+//! | `GET /auth/avatar` | the picture Google gave for this account (fetched by the server, kept a day), or 404 |
 //! | `POST /auth/profile` | JSON `{name?, role?, roleOther?, experience?, plan?, createFirst?, tips?, onboarded?}`: the onboarding answers |
 //! | `POST /auth/invite` | JSON `{emails: [...]}`: people to invite; `{invited, link, emailed: false}` (no email is sent yet) |
 //! | `GET /auth/check` | 204 when signed in, else 401 (the proxy asks before serving the app) |
@@ -70,16 +71,21 @@ struct Pending {
     at: Instant,
 }
 
+/// A picture fetched from Google: when, the bytes and their media type.
+type Avatar = (Instant, Vec<u8>, String);
+
 /// What every request shares.
 pub struct Ctx {
     pub accounts: Arc<Mutex<Accounts>>,
     pub settings: Settings,
     pending: Mutex<HashMap<String, Pending>>,
+    /// Pictures fetched from Google, by account: when, the bytes and their media type.
+    avatars: Mutex<HashMap<String, Avatar>>,
 }
 
 impl Ctx {
     pub fn new(accounts: Arc<Mutex<Accounts>>, settings: Settings) -> Ctx {
-        Ctx { accounts, settings, pending: Mutex::new(HashMap::new()) }
+        Ctx { accounts, settings, pending: Mutex::new(HashMap::new()), avatars: Mutex::new(HashMap::new()) }
     }
 
     fn accounts(&self) -> MutexGuard<'_, Accounts> {
@@ -300,14 +306,49 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             let invited = ctx.accounts().invite(&u.id, &body.emails)?;
             Ok(serde_json::json!({"invited": invited, "link": invite_link(ctx), "emailed": false}))
         }),
+        ("GET", "/auth/avatar") => match current(ctx, req) {
+            Some(u) => avatar(ctx, &u),
+            None => Response { status: 401, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() },
+        },
         ("GET", "/auth/google") => google_start(ctx, req),
         ("GET", "/auth/google/callback") => google_back(ctx, req),
         ("POST", "/auth/admin") => admin(ctx, req),
-        (_, "/login" | "/logout" | "/auth/me" | "/auth/check" | "/auth/admin" | "/auth/profile" | "/auth/invite") => {
+        (_, "/login" | "/logout" | "/auth/me" | "/auth/avatar" | "/auth/check" | "/auth/admin" | "/auth/profile" | "/auth/invite") => {
             Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site))
         }
         _ => Response::html(404, pages::message("Page not found", "There's nothing at this address.", &ctx.settings.site)),
     }
+}
+
+/// How long a fetched picture is kept, and how many are (one per account that asked).
+const AVATAR_FOR: Duration = Duration::from_secs(24 * 3600);
+const AVATARS: usize = 4096;
+
+/// `u`'s picture, from Google the first time (and once a day), from memory otherwise.
+fn avatar(ctx: &Ctx, u: &User) -> Response {
+    let cached = ctx.avatars.lock().unwrap_or_else(|e| e.into_inner()).get(&u.id).filter(|(at, ..)| at.elapsed() < AVATAR_FOR).cloned();
+    let (bytes, kind) = match cached {
+        Some((_, bytes, kind)) => (bytes, kind),
+        None => {
+            // Asks Google over the network: no lock is held.
+            let (bytes, kind) = match google::fetch_picture(&u.picture) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::info!("accounts: no picture for an account: {e}");
+                    return Response { status: 404, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() };
+                }
+            };
+            let mut kept = ctx.avatars.lock().unwrap_or_else(|e| e.into_inner());
+            if kept.len() >= AVATARS {
+                kept.retain(|_, (at, ..)| at.elapsed() < AVATAR_FOR);
+            }
+            if kept.len() < AVATARS {
+                kept.insert(u.id.clone(), (Instant::now(), bytes.clone(), kind.clone()));
+            }
+            (bytes, kind)
+        }
+    };
+    Response { status: 200, headers: vec![("Content-Type", kind), ("Cache-Control", "private, max-age=3600".into())], body: bytes }
 }
 
 /// `/auth/me`'s answer for a signed-in account.
@@ -315,7 +356,7 @@ fn me(ctx: &Ctx, u: &User) -> serde_json::Value {
     let invited = ctx.accounts().invites_by(&u.id);
     serde_json::json!({
         "signedIn": true,
-        "user": {"id": u.id, "email": u.email, "name": u.name, "profile": u.profile, "invited": invited},
+        "user": {"id": u.id, "email": u.email, "name": u.name, "hasPicture": !u.picture.is_empty(), "profile": u.profile, "invited": invited},
         "inviteLink": invite_link(ctx),
     })
 }
@@ -450,7 +491,7 @@ fn google_back(ctx: &Ctx, req: &Request) -> Response {
         Ok(w) => w,
         Err(e) => return fail(&e),
     };
-    let user = ctx.accounts().google_user(&who.sub, &who.email, &who.name);
+    let user = ctx.accounts().google_user(&who.sub, &who.email, &who.name, &who.picture);
     match user {
         Ok(u) => signed_in(ctx, &u.id, &p.next).cookie(clear_cookie(&ctx.settings, GOOGLE_COOKIE, "/auth/google")),
         Err(e) => fail(&e),

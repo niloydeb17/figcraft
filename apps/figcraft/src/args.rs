@@ -4,7 +4,8 @@
 //! is up; everything else that isn't a flag is a file to open, as a path or a `file://` URL (the
 //! Linux desktop entry passes URLs, `%U`, so that it can also hand over invite links). Any other
 //! `--flag` is unknown and stops the app at startup (#836): a mistyped root flag must never leave
-//! the app running unconfined. After a bare `--`, every argument is a file.
+//! the app running unconfined. After a bare `--`, every argument is a file. `--screenshot
+//! <file.png>` draws about 120 frames, saves the window as a PNG and quits.
 
 /// What the app was started with.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -19,6 +20,9 @@ pub struct Args {
     /// which is refused at startup.
     pub read_roots: Vec<String>,
     pub write_roots: Vec<String>,
+    /// `--screenshot <file.png>`: start, draw about 120 frames, save the window as a PNG there
+    /// and quit (nothing is kept: no recovery copies, no settings written).
+    pub screenshot: Option<String>,
     /// `--flags` the app doesn't know, as given.
     pub unknown: Vec<String>,
 }
@@ -71,6 +75,8 @@ pub fn parse(args: &[String]) -> Args {
         };
         if let Some(roots) = roots {
             roots.push(inline.or_else(|| it.next().cloned()).unwrap_or_default());
+        } else if flag == "--screenshot" {
+            out.screenshot = inline.or_else(|| it.next().cloned()).filter(|p| !p.is_empty());
         } else if flag == "--control" {
             out.control = inline.or_else(|| it.next().cloned()).and_then(|p| p.parse().ok());
         } else if is_invite(a) {

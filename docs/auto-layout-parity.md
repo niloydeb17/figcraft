@@ -1,13 +1,40 @@
 # Auto layout and constraints parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** patch (fill children share the free space by their content area, border-box fashion, as the Flexbox article says (#1824); double-click an edge of an auto layout frame's box for Hug contents, Alt+double-click an edge of a child's box for Fill container, as the Guide to auto layout says (#1838); a child resized to the full available space of its auto layout frame becomes Fill container on that axis, as the Guide to auto layout says; a text keeps a max height or a number of max lines, not both, as the Guide to auto layout says: a max height sets max lines to Auto and max lines remove the max height; Remove all auto layout, as the help center's More layout options has it: `layout.removeAll` takes the auto layout off a frame and every frame nested in it in one undo step; grid auto-placement looks for free cells a 64-bit word at a time and skips what blocks it, with the same placements (#1083); Layout sidebar: Add auto layout (+) is available for groups and converts a single group to a frame in place, with mask order, flow-only inference and Fill sizing preserved; adding auto layout to an empty frame keeps its size (#369); `node.set` applies auto layout keys only to frames, with warnings (#603); core editor leftovers: auto gap handles, wrapped-line alignment; behaviour suite written from the public documentation, every rule's status; fixes and the missing settings it found) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (live synthetic comparison: empty Hug retention, bounded Hug wrapping, constrained text truncation, signed and automatic wrap gaps, and instance Hug geometry) · **Target:** Figma Design (desktop observation and public documentation)
 
 Auto layout is the most used layout feature in Figma and the one where small differences (a
 hugging frame one pixel off, text wrapping at another width) break real files. **Breadth ~98%,
 ready ~74% (estimated)**: every rule of the public documentation is a test case with the sizes and
 positions it implies (`crates/layout/src/behaviour_tests.rs`, 64 cases, and
-`crates/engine/src/al_behaviour_tests.rs` through commands), and all pass; nothing yet against real
-Figma files. Remaining: 3–6 h.
+`crates/engine/src/al_behaviour_tests.rs` through commands), and all pass. Synthetic frames have
+also been compared with the running Figma desktop app (see below); production-document behavior
+still needs validation. Remaining estimate unchanged: 3–6 h.
+
+## Observed desktop behavior, 2026-11-04
+
+A comparison in the UI3 community file inventoried 58,536 Auto Layout nodes and exercised 34
+synthetic horizontal/vertical scenarios: 138 frame variants at 375, 768, 1280 and 1920 px, with
+350 px boundary cases. Short, long, empty and restored nested text added 16 dynamic comparisons.
+The inventory is not a claim that all those existing nodes were reproduced or validated in FigCraft.
+
+Five observed differences were fixed:
+
+| Behavior | Correction | Regression coverage |
+|---|---|---|
+| Empty Hug frames retain their previous dimensions, including after removal of the last child | Preserve the existing size when there is no flow content; retain the padding floor and min/max limits | `observed_figma_tests::empty_hug_keeps_its_last_size_after_removing_the_last_child` |
+| A maximum on a wrapping Hug main axis bounds its natural size before wrapping | Wrap at the bounded natural size, then derive the cross size from the wrapped lines | `observed_figma_tests::a_maximum_wraps_a_hugging_main_axis_before_sizing_the_cross_axis` |
+| Auto-height text honors its maximum height and truncates with an ellipsis | Share constrained text measurement between auto sizing, layout, canvas and exports | `observed_figma_tests::remeasuring_fill_text_preserves_its_height_limits`, `max_height_tests` |
+| Negative gaps affect whether children fit together on a wrapped line | Use the signed gap when forming lines | `observed_figma_tests::wrapping_uses_the_signed_gap_and_no_reserved_space_for_automatic_gaps` |
+| Automatic gaps reserve no fixed gap while determining wrapped lines | Form lines from child widths, then distribute automatic gaps | Same wrapping regression test |
+
+An instance rebuild also preserves its own derived Hug size when its content becomes hidden;
+the existing deep-component incremental-versus-full-rebuild suite verifies this behavior.
+After fixes the tested visible geometry matches within 0.1 px except for a 0.18 px first-baseline
+offset in the mixed-size Inter text example. Hidden layers can retain different unused coordinates
+depending on their creation sequence; showing the layer gives the same layout in both apps.
+The browser build was visually checked at the four viewport widths with the canvas UI hidden;
+frame widths were tested separately because editor viewport changes do not resize design frames.
+Grid layout was inventoried but was not part of the new desktop comparison scenarios.
 
 ## Adding auto layout to a group
 
@@ -100,6 +127,7 @@ Status: **pass** (a case in the suite holds), **fixed** (the suite found a diver
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | M2: live synthetic Auto Layout comparison; fixed empty Hug retention, bounded Hug wrapping, text maximum-height truncation, negative-gap wrapping and automatic-gap wrapping. Instance rebuilds retain their own derived Hug geometry. Added observed-behavior regressions; percentages and estimates unchanged. |
 | 2026-11-02 | patch | M2, #1824: fill container children share the free space by their content area: each one's own insets (padding and an included inside stroke, from the same `insets` the frame uses) come off the free space before the equal split and go back on its share, so a child with more padding or a thicker inside stroke takes a little more and the content areas match ("Figma distributes space amongst fill container children by the children's content area instead of by their size, matching the CSS border-box model", Use auto layout with CSS Flexbox in mind). Min and max still clamp the outer sizes and the frozen-share loop is as it was; children without insets split as before. Test: `nested_tests::fill_children_share_by_content_area` |
 | 2026-11-02 | patch | M2, #1838: a double-click on an edge of an auto layout frame's bounding box sets Hug contents on that axis, Alt+double-click on an edge of a child's Fill container ("Double-click the vertical or horizontal edge of an auto layout object's bounding box to set it to Hug contents", "Hold ⌥ Option or Alt and double-click ... to set it to Fill container", Guide to auto layout); a vertical edge sizes the width, a horizontal one the height; the Keyboard shortcuts panel lists both gestures. Test: `double_click_tests::a_double_click_on_an_auto_layout_edge_hugs_and_with_alt_fills`. Numbers unchanged. |
 | 2026-11-02 | patch | M2: a child of an auto layout frame resized to the full space available to it on an axis (the frame's size less its padding: across the flow for any child, along the flow for a lone child) becomes Fill container on that axis, whether by `transform.resize`, the W/H fields or a canvas handle ("Child objects of an auto layout frame will also be set to Fill container if they are manually resized to the full available space of the parent frame", Guide to auto layout). Any other size keeps the axis Fixed as before; beside siblings along the flow, in a hugging or wrapping frame, in a grid and for a layer that ignores the layout nothing changes. Test: `al_behaviour_tests::a_child_resized_to_the_full_available_space_becomes_fill` |

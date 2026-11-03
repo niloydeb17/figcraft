@@ -1085,6 +1085,10 @@ fn draw(p: &P, icon: Icon) {
         ModePrototype => draw(p, Prototype),
         DevCopyColors => draw(p, Eyedropper),
         DevMeasure => draw(p, Measure),
+        // The home sidebar's marks exist only as UI3 kit glyphs (`figma.rs`).
+        Notifications | Recents | Community | Drafts | Resources | Trash | Folder | Upgrade => {}
+        Contrast | PaintSolid | PaintGradient | PaintPattern | PaintImage | PaintVideo | PaintNoise | SelectSource | TileGrid | TileHex
+        | TileHexVertical | FlipGradient | RotateGradient => {}
         DevAnnotation => draw(p, Comment),
         Clipboard => draw(p, Export),
         RailVariables => draw(p, Styles),

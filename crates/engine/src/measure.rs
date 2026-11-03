@@ -6,13 +6,12 @@ pub struct TextMeasure;
 
 impl figcraft_layout::Measure for TextMeasure {
     fn text_height(&self, doc: &Document, id: NodeId, width: f64) -> Option<f64> {
-        let n = doc.node(id)?;
-        let NodeKind::Text(t) = &n.kind else { return None };
-        let mut t = t.clone();
+        let mut n = doc.node(id)?.clone();
+        let NodeKind::Text(t) = &mut n.kind else { return None };
         if t.auto_resize == TextAutoResize::WidthAndHeight {
             t.auto_resize = TextAutoResize::Height;
         }
-        Some(figcraft_text::layout(&t, Some(width), None).height.max(1.0))
+        Some(figcraft_text::layout_node_at(&n, Some(width), None)?.height.max(1.0))
     }
     fn text_size(&self, doc: &Document, id: NodeId) -> Option<(f64, f64)> {
         let n = doc.node(id)?;

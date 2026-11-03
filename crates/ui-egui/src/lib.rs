@@ -15,6 +15,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 };
 
 pub mod a11y;
+pub mod account_picture;
 pub mod bidi;
 pub mod canvas;
 pub mod cjk;
@@ -471,6 +472,8 @@ pub struct UiState {
     pub icon_gallery: bool,
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
+    /// The signed-in account's picture, once the page's server has handed it over.
+    pub account_picture: Option<egui::TextureHandle>,
     /// The first-run onboarding's answers while its steps show (a new account's).
     pub onboarding: Option<onboarding::Flow>,
     /// The editor tour's step, while it shows.
@@ -668,6 +671,7 @@ impl Default for UiState {
             title_bar: TitleBar::Native,
             icon_gallery: false,
             toast: None,
+            account_picture: None,
             onboarding: None,
             tour: None,
             tour_anchors: tour::Anchors::default(),

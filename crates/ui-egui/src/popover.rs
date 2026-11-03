@@ -93,6 +93,14 @@ pub struct Popover {
     pub close: Rect,
     /// The panel's size as laid out last frame.
     size: Vec2,
+    /// Header tabs in place of the title (a tab-switched panel), the active one and the tip of the
+    /// "+" beside the X (none: no button).
+    tabs: Vec<String>,
+    active_tab: usize,
+    plus: Option<String>,
+    /// What the header was asked this frame: the tab clicked (not the active one) and the "+".
+    pub tab_clicked: Option<usize>,
+    pub plus_clicked: bool,
 }
 
 impl Popover {
@@ -118,7 +126,21 @@ impl Popover {
             slot: Rect::NOTHING,
             close: Rect::NOTHING,
             size: vec2(WIDTH, 0.0),
+            tabs: Vec::new(),
+            active_tab: 0,
+            plus: None,
+            tab_clicked: None,
+            plus_clicked: false,
         }
+    }
+
+    /// The header shows these tabs (`active` raised) instead of the title, and a "+" button with
+    /// the tip `plus` beside the X when there is one. Set it every frame; clicks are read back from
+    /// [`Self::tab_clicked`] and [`Self::plus_clicked`] after [`Self::show`].
+    pub fn header_tabs(&mut self, tabs: Vec<String>, active: usize, plus: Option<String>) {
+        self.tabs = tabs;
+        self.active_tab = active;
+        self.plus = plus;
     }
 
     /// `width` points wide instead of [`WIDTH`].
@@ -132,6 +154,12 @@ impl Popover {
     pub fn pad(mut self, pad: f32) -> Self {
         self.pad = pad.max(0.0);
         self
+    }
+
+    /// Change the surface and the slot's margin of an open popover.
+    pub fn set_look(&mut self, surface: Surface, pad: f32) {
+        self.surface = surface;
+        self.pad = pad.max(0.0);
     }
 
     /// Drawn on the dark surface the style browser uses.
@@ -186,11 +214,24 @@ impl Popover {
             let (header, _) = ui.allocate_exact_size(vec2(self.width, HEADER_H), Sense::hover());
             let close_rect = Rect::from_min_size(pos2(header.max.x - CLOSE_RIGHT - CLOSE, header.center().y - CLOSE / 2.0), Vec2::splat(CLOSE));
             let handle = Rect::from_min_max(header.min, pos2(close_rect.min.x - 6.0, header.max.y));
+            let tabbed = !self.tabs.is_empty();
+            let plus_rect = close_rect.translate(vec2(-(CLOSE + TAB_GAP), 0.0));
+            let handle =
+                if tabbed && self.plus.is_some() { Rect::from_min_max(header.min, pos2(plus_rect.min.x - 6.0, header.max.y)) } else { handle };
             let drag = ui.interact(handle, self.id.with("drag"), Sense::drag());
-            let font = semibold(11.0);
-            let title = widgets::elide_font(ui, &self.title, (handle.width() - TITLE_LEFT - 8.0).max(0.0), font.clone());
-            ui.painter().text(pos2(header.min.x + TITLE_LEFT, header.center().y), Align2::LEFT_CENTER, title, font, header_text(t, dark));
-            close = close_button(ui, self.id.with("close"), close_rect, dark, t);
+            if tabbed {
+                self.tab_clicked = tab_strip(ui, self.id, header, &self.tabs, self.active_tab, dark, t);
+                self.plus_clicked = match &self.plus {
+                    Some(tip) => icon_button(ui, self.id.with("plus"), plus_rect, Icon::Plus, tip, dark, t),
+                    None => false,
+                };
+                close = icon_button(ui, self.id.with("close"), close_rect, Icon::Close, tr("Close"), dark, t);
+            } else {
+                let font = semibold(11.0);
+                let title = widgets::elide_font(ui, &self.title, (handle.width() - TITLE_LEFT - 8.0).max(0.0), font.clone());
+                ui.painter().text(pos2(header.min.x + TITLE_LEFT, header.center().y), Align2::LEFT_CENTER, title, font, header_text(t, dark));
+                close = close_button(ui, self.id.with("close"), close_rect, dark, t);
+            }
             // 2. The header drags the panel (grabbed where the press landed, so the first frame of
             // a fast drag counts too); the X keeps its own clicks.
             if drag.hovered() && ctx.input(|i| i.pointer.primary_pressed()) {
@@ -264,6 +305,49 @@ fn close_button(ui: &mut Ui, id: Id, rect: Rect, dark: bool, t: Tokens) -> bool 
         ui.painter().rect_filled(rect, CornerRadius::same(5), if dark { Color32::from_white_alpha(20) } else { t.hover });
     }
     icons::paint(ui.painter(), rect.shrink(6.0), Icon::Close, if dark { t.menu_text } else { t.icon });
+    resp.clicked()
+}
+
+/// The gap between tabs and between the header's buttons when it is tabbed.
+const TAB_GAP: f32 = 4.0;
+
+/// The header's tab pills, from 8 points in: the active one raised on the field colour in the
+/// semibold, the others dim. Returns the tab clicked that is not the active one.
+fn tab_strip(ui: &mut Ui, id: Id, header: Rect, tabs: &[String], active: usize, dark: bool, t: Tokens) -> Option<usize> {
+    let mut x = header.min.x + 8.0;
+    let mut clicked = None;
+    for (i, label) in tabs.iter().enumerate() {
+        let on = i == active;
+        let font = if on { semibold(11.0) } else { crate::theme::regular(11.0) };
+        let (text, dim, raised, hover) = if dark {
+            (t.menu_text, t.menu_dim, Color32::from_white_alpha(20), Color32::from_white_alpha(12))
+        } else {
+            (t.text, t.text_secondary, t.field, t.hover)
+        };
+        let galley = ui.painter().layout_no_wrap(label.clone(), font, if on { text } else { dim });
+        let rect = Rect::from_min_size(pos2(x, header.center().y - 12.0), vec2(galley.size().x + 16.0, 24.0));
+        let resp = ui.interact(rect, id.with(("tab", i)), Sense::click());
+        crate::a11y::tab(&resp, label, on);
+        if on || resp.hovered() {
+            ui.painter().rect_filled(rect, CornerRadius::same(5), if on { raised } else { hover });
+        }
+        ui.painter().galley(pos2(rect.min.x + 8.0, rect.center().y - galley.size().y / 2.0), galley, if on { text } else { dim });
+        if resp.clicked() && !on {
+            clicked = Some(i);
+        }
+        x = rect.max.x + TAB_GAP;
+    }
+    clicked
+}
+
+/// A 24-point header button with the kit's 24-unit glyph at its own size (the tabbed header's "+"
+/// and X).
+fn icon_button(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str, dark: bool, t: Tokens) -> bool {
+    let resp = ui.interact(rect, id, Sense::click()).tip(tip);
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), if dark { Color32::from_white_alpha(20) } else { t.hover });
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(16.0)), icon, if dark { t.menu_text } else { t.icon });
     resp.clicked()
 }
 

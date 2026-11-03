@@ -29,7 +29,7 @@ pub const GAP: f32 = 32.0;
 pub const CARD_MIN: f32 = 260.0;
 pub const CARD_MAX: f32 = 360.0;
 /// The footer under a card's picture: its icon, name and time.
-const FOOTER_H: f32 = 58.0;
+const FOOTER_H: f32 = 60.0;
 /// A table row, and the table's header.
 const ROW_H: f32 = 44.0;
 const HEADER_H: f32 = 32.0;
@@ -579,6 +579,15 @@ enum Action {
     Remove(String),
     Sort(Sort),
     View(View),
+    Tab(Tab),
+    Filter(Option<figcraft_doc::FileKind>),
+}
+
+/// The tabs beside "Recently viewed".
+#[derive(Clone, Copy)]
+enum Tab {
+    SharedFiles,
+    SharedFolders,
 }
 
 /// The Recent files heading, its toolbar and the files as cards or a table. With a `query` (lower
@@ -595,6 +604,10 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
     let state = &mut app.ui.home_view.recents;
     state.refresh(ui.ctx(), &paths, time);
     let mut files = sorted(state.shown(&paths), sort);
+    let filter = app.ui.home_view.files_filter;
+    if let Some(kind) = filter {
+        files.retain(|f| f.kind == kind);
+    }
     if searching {
         let docs = &app.session.docs;
         files.retain(|f| f.path.to_lowercase().contains(query) && !docs.iter().any(|d| d.path.as_deref() == Some(f.path.as_str())));
@@ -603,13 +616,18 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
         }
     }
     let with_created = files.iter().any(|f| f.stat.is_some_and(|s| s.created.is_some()));
-    let mut action = toolbar(ui, t, view, sort, with_created);
-    ui.add_space(16.0);
+    let mut action = toolbar(ui, t, view, sort, with_created, filter, true);
     let chosen = match view {
         View::Grid => grid(ui, t, state, &files, now, time, reduce_motion),
         View::List => list(ui, t, state, &files, now, sort, with_created),
     };
     action = action.or(chosen);
+    apply(app, action);
+    files.len()
+}
+
+/// Do what the user asked for on the recent files this frame.
+fn apply(app: &mut FigApp, action: Option<Action>) {
     match action {
         Some(Action::Open(path)) => {
             if app.run_user("file.open", json!({"path": path})).is_some() {
@@ -629,32 +647,92 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
             view.store(&mut app.session.prefs);
             app.services.save_prefs(&app.session.prefs);
         }
+        Some(Action::Tab(Tab::SharedFiles)) => {
+            app.ui.home_view.section = crate::home::Section::Online;
+            app.ui.home_view.file_query.clear();
+        }
+        Some(Action::Tab(Tab::SharedFolders)) => app.toast(tr("Shared folders aren't in FigCraft yet.")),
+        Some(Action::Filter(filter)) => app.ui.home_view.files_filter = filter,
         None => {}
     }
-    files.len()
 }
 
-/// "Recent files", and at the right the sort menu and the grid and list buttons.
-fn toolbar(ui: &mut Ui, t: &Tokens, view: View, sort: Sort, with_created: bool) -> Option<Action> {
+/// The row over the files before there are any (a first run): its tabs and filters, none of the
+/// sort and view buttons.
+pub fn first_run_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
+    let (view, sort) = (View::of(&app.session.prefs), Sort::of(&app.session.prefs));
+    let action = toolbar(ui, t, view, sort, false, app.ui.home_view.files_filter, false);
+    apply(app, action);
+}
+
+/// The row over the files (64 pt, controls 24 pt tall): the tabs ("Recently viewed" is the current
+/// one; Shared files shows your online files), and at the right the organization and file-kind
+/// filters, then (with `files`) the sort menu and the grid and list buttons.
+fn toolbar(
+    ui: &mut Ui,
+    t: &Tokens,
+    view: View,
+    sort: Sort,
+    with_created: bool,
+    filter: Option<figcraft_doc::FileKind>,
+    files: bool,
+) -> Option<Action> {
     let mut action = None;
-    ui.add_space(28.0);
-    let width = ui.available_width();
-    let (row, _) = ui.allocate_exact_size(vec2(width, widgets::FIELD_H), Sense::hover());
-    ui.painter().text(pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, tr("Recent files"), semibold(12.0), t.text_secondary);
-    let toggle = Rect::from_min_size(pos2(row.max.x - 56.0, row.min.y), vec2(56.0, widgets::FIELD_H));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(toggle), |ui| {
-        let active = Some(if view == View::Grid { 0 } else { 1 });
-        match widgets::segmented(ui, &[(Icon::ViewGrid, tr("Show as grid")), (Icon::ViewList, tr("Show as list"))], active, 28.0) {
-            Some(0) if view != View::Grid => action = Some(Action::View(View::Grid)),
-            Some(1) if view != View::List => action = Some(Action::View(View::List)),
-            _ => {}
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
+    let text_w = |ui: &Ui, s: &str, font: egui::FontId| ui.painter().layout_no_wrap(s.to_string(), font, t.text).size().x;
+    let mut x = row.min.x;
+    for (label, current, tab) in [
+        (tr("Recently viewed"), true, None),
+        (tr("Shared files"), false, Some(Tab::SharedFiles)),
+        (tr("Shared folders"), false, Some(Tab::SharedFolders)),
+    ] {
+        let font = if current { semibold(11.0) } else { regular(11.0) };
+        let r = Rect::from_min_size(pos2(x, row.min.y + 16.0), vec2(text_w(ui, label, font.clone()).ceil() + 24.0, 24.0));
+        x = r.max.x + 4.0;
+        let resp = ui.interact(r, Id::unique(("home_recents_tab", label)), Sense::click());
+        a11y::tab(&resp, label, current);
+        if current {
+            ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-    });
-    let label = tr(sort.key.label());
-    let w = (ui.painter().layout_no_wrap(label.to_string(), regular(11.0), t.text).size().x + 40.0).max(110.0);
-    let menu = Rect::from_min_size(pos2(toggle.min.x - 8.0 - w, row.min.y), vec2(w, widgets::FIELD_H));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(menu), |ui| {
-        let resp = widgets::dropdown(ui, label, w, None);
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, font, if current { t.text } else { t.text_secondary });
+        if resp.clicked()
+            && let Some(tab) = tab
+        {
+            action = Some(Action::Tab(tab));
+        }
+    }
+    let mut right = row.max.x;
+    if files {
+        // Two 24 pt cells in a 48 pt track; the current one is raised.
+        let toggle = Rect::from_min_size(pos2(right - 48.0, row.min.y + 20.0), vec2(48.0, 24.0));
+        right = toggle.min.x - 8.0;
+        ui.painter().rect_filled(toggle, CornerRadius::same(5), t.field);
+        for (i, (icon, tip, shown)) in
+            [(Icon::ViewGrid, tr("Show as grid"), View::Grid), (Icon::ViewList, tr("Show as list"), View::List)].into_iter().enumerate()
+        {
+            let cell = Rect::from_min_size(pos2(toggle.min.x + 24.0 * i as f32, toggle.min.y), vec2(24.0, 24.0));
+            let resp = ui.interact(cell, Id::unique(("home_recents_view", i)), Sense::click()).on_hover_text(tip);
+            a11y::toggle(&resp, tip, view == shown);
+            if view == shown {
+                ui.painter().rect_filled(cell, CornerRadius::same(5), t.panel);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(cell.shrink(1.0), CornerRadius::same(4), t.hover);
+            }
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(cell.center(), vec2(16.0, 16.0)),
+                icon,
+                if view == shown { t.icon } else { t.icon_secondary },
+            );
+            if resp.clicked() && view != shown {
+                action = Some(Action::View(shown));
+            }
+        }
+        // The sort menu.
+        let label = tr(sort.key.label());
+        let resp = drop_button(ui, t, &mut right, row.min.y + 20.0, "home_recents_sort", label);
         crate::right::menu_popup(&resp).show(|ui| {
             heading(ui, t, tr("Sort by"));
             for key in SortKey::ALL.into_iter().filter(|k| *k != SortKey::Created || with_created) {
@@ -673,8 +751,43 @@ fn toolbar(ui: &mut Ui, t: &Tokens, view: View, sort: Sort, with_created: bool) 
                 }
             }
         });
+    }
+    // The kind of file shown: a real filter.
+    let kinds =
+        [(None, tr("All files")), (Some(figcraft_doc::FileKind::Design), tr("Design files")), (Some(figcraft_doc::FileKind::Board), tr("Boards"))];
+    let current = kinds.iter().find(|(k, _)| *k == filter).map_or(tr("All files"), |(_, l)| *l);
+    let resp = drop_button(ui, t, &mut right, row.min.y + 20.0, "home_recents_kind", current);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for (kind, label) in kinds {
+            if crate::right::menu_check(ui, filter == kind, label, "") {
+                action = Some(Action::Filter(kind));
+                ui.close();
+            }
+        }
+    });
+    // One workspace: its menu has the one entry, checked.
+    let resp = drop_button(ui, t, &mut right, row.min.y + 20.0, "home_recents_orgs", tr("All organizations"));
+    crate::right::menu_popup(&resp).show(|ui| {
+        if crate::right::menu_check(ui, true, tr("All organizations"), "") {
+            ui.close();
+        }
     });
     action
+}
+
+/// A white, hairlined 24 pt button ending at `*right` (which moves 8 pt left of it): the label 8 pt
+/// in and a chevron at the end; the menu it opens is the caller's.
+fn drop_button(ui: &mut Ui, t: &Tokens, right: &mut f32, y: f32, id: &'static str, label: &str) -> Response {
+    let w = 8.0 + ui.painter().layout_no_wrap(label.to_string(), regular(11.0), t.text).size().x.ceil() + 20.0;
+    let r = Rect::from_min_size(pos2(*right - w, y), vec2(w, 24.0));
+    *right = r.min.x - 8.0;
+    let resp = ui.interact(r, Id::unique(id), Sense::click());
+    a11y::combo(&resp, "", label, a11y::menu_open(&resp));
+    ui.painter().rect_filled(r, CornerRadius::same(5), if resp.hovered() { t.hover } else { t.panel });
+    ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 10.0, r.center().y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+    resp
 }
 
 /// A group's heading in a menu.
@@ -827,14 +940,14 @@ fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
 /// A card while its file is being looked at: grey blocks where the picture, icon and text go.
 fn skeleton(ui: &Ui, t: &Tokens, rect: Rect, picture_h: f32) {
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(8), t.panel);
+    p.rect_filled(rect, CornerRadius::same(13), t.panel);
     let picture = Rect::from_min_size(rect.min, vec2(rect.width(), picture_h)).shrink(1.0);
-    p.rect_filled(picture, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, t.field);
+    p.rect_filled(picture, CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 }, t.field);
     let y = picture.max.y + FOOTER_H / 2.0;
     p.rect_filled(Rect::from_center_size(pos2(rect.min.x + 24.0, y), vec2(16.0, 16.0)), CornerRadius::same(4), t.field);
     p.rect_filled(Rect::from_min_size(pos2(rect.min.x + 44.0, y - 11.0), vec2(rect.width() * 0.45, 9.0)), CornerRadius::same(3), t.field);
     p.rect_filled(Rect::from_min_size(pos2(rect.min.x + 44.0, y + 4.0), vec2(rect.width() * 0.3, 8.0)), CornerRadius::same(3), t.field);
-    p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    p.rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, t.border), StrokeKind::Inside);
 }
 
 struct CardPaint<'a> {
@@ -854,9 +967,9 @@ struct CardPaint<'a> {
 fn card(paint: CardPaint<'_>) {
     let CardPaint { ui, tokens: t, rect, picture_h, response: resp, selected, file, stat, picture, alpha, now } = paint;
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(8), if resp.hovered() { t.hover } else { t.panel });
+    p.rect_filled(rect, CornerRadius::same(13), t.panel);
     let area = Rect::from_min_size(rect.min, vec2(rect.width(), picture_h)).shrink(1.0);
-    let top = CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 };
+    let top = CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 };
     p.rect_filled(area, top, t.canvas);
     match picture {
         Some((page, texture, _)) if stat.exists && (page.is_some() || texture.is_some()) => {
@@ -877,19 +990,20 @@ fn card(paint: CardPaint<'_>) {
         _ => icons::paint(p, Rect::from_center_size(area.center(), vec2(28.0, 28.0)), Icon::Page, t.icon_secondary),
     }
     p.line_segment([pos2(rect.min.x, area.max.y + 0.5), pos2(rect.max.x, area.max.y + 0.5)], Stroke::new(1.0, t.border));
-    let y = area.max.y + 1.0 + FOOTER_H / 2.0;
-    file_icon(ui, t, pos2(rect.min.x + 24.0, y), file);
-    let (x, w) = (rect.min.x + 44.0, rect.width() - 56.0);
-    let name = widgets::elide_font(ui, &file.name, w, semibold(12.5));
-    p.text(pos2(x, y - 8.0), Align2::LEFT_CENTER, name, semibold(12.5), t.text);
-    let detail = widgets::elide_font(ui, &file.detail(now), w, regular(11.5));
-    p.text(pos2(x, y + 9.0), Align2::LEFT_CENTER, detail, regular(11.5), t.text_secondary);
+    // The footer: 16 pt in, the 16 pt mark, 12 pt, then the name and under it when it was edited.
+    let footer = area.max.y + 1.0;
+    file_icon(ui, t, pos2(rect.min.x + 24.0, footer + FOOTER_H / 2.0), file);
+    let (x, w) = (rect.min.x + 44.0, rect.width() - 60.0);
+    let name = widgets::elide_font(ui, &file.name, w, semibold(11.0));
+    p.text(pos2(x, footer + 20.0), Align2::LEFT_CENTER, name, semibold(11.0), t.text);
+    let detail = widgets::elide_font(ui, &file.detail(now), w, regular(11.0));
+    p.text(pos2(x, footer + 38.0), Align2::LEFT_CENTER, detail, regular(11.0), t.text_secondary);
     if selected {
-        p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, ACCENT), StrokeKind::Inside);
+        p.rect_stroke(rect, CornerRadius::same(13), Stroke::new(2.0, ACCENT), StrokeKind::Inside);
     } else {
-        p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, if resp.hovered() { t.border_strong } else { t.border }), StrokeKind::Inside);
+        p.rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, if resp.hovered() { t.border_strong } else { t.border }), StrokeKind::Inside);
         if resp.has_focus() {
-            p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, t.focus), StrokeKind::Outside);
+            p.rect_stroke(rect, CornerRadius::same(13), Stroke::new(2.0, t.focus), StrokeKind::Outside);
         }
     }
 }

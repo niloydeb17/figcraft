@@ -63,11 +63,25 @@ fn templates_tab(u: &mut Ui) -> Vec<Shape> {
 }
 
 #[test]
-fn the_sidebar_has_recents_online_and_templates_and_no_placeholders() {
+fn the_sidebar_has_the_sections_and_the_workspace_rows() {
     let mut u = first_run();
     let s = shapes(&mut u);
     assert!(has_text(&s, "Recents") && has_text(&s, "Online") && has_text(&s, "Templates"));
-    assert!(!has_text(&s, "Drafts") && !has_text(&s, "Community"));
+    for row in [
+        "Drafts",
+        "All folders",
+        "Resources",
+        "Trash",
+        "See what's included",
+        "Your plan and usage",
+        "Starred",
+        "Team folder",
+        "Upgrade",
+        "Your workspace",
+        "Free",
+    ] {
+        assert!(has_text(&s, row), "{row}");
+    }
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let nodes: Vec<_> = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes.into_iter().map(|(_, n)| n).collect();
@@ -372,7 +386,8 @@ fn a_first_run_offers_templates_on_recents_and_recent_files_replace_them() {
     assert!(has_text(&s, "Start from a template"));
     let offered = TEMPLATES.iter().filter(|t| has_text(&s, t.name)).count();
     assert_eq!(offered, 4);
-    assert!(!has_text(&s, "Recent files") && !has_text(&s, "Open files"));
+    assert!(has_text(&s, "Recently viewed") && !has_text(&s, "Open files"), "the tabs are there before any file");
+    assert!(!has_text(&s, "Show as grid") && !has_text(&s, "Last modified"), "but not the sort and view buttons");
     click(&mut u, text_center(&s, "See all templates"));
     assert_eq!(u.app.ui.home_view.section, Section::Templates);
     // From the row: a click opens it.
@@ -384,7 +399,7 @@ fn a_first_run_offers_templates_on_recents_and_recent_files_replace_them() {
     u.app.ui.home = true;
     u.app.session.prefs.recent_files = vec!["/tmp/ridgeline.figcraft".into()];
     let s = settle(&mut u);
-    assert!(has_text(&s, "Recent files") && has_text(&s, "ridgeline"));
+    assert!(has_text(&s, "Recently viewed") && has_text(&s, "ridgeline"));
     assert!(!has_text(&s, "Start from a template") && !has_text(&s, "See all templates"));
     assert!(has_text(&s, "Open files"), "the document opened from the template is listed");
 }
@@ -426,37 +441,19 @@ fn an_open_files_long_name_and_path_share_their_row_without_overlapping() {
 }
 
 #[test]
-fn the_getting_started_card_closes_stays_closed_and_comes_back_from_help() {
+fn the_home_screen_has_no_tips_card_or_join_row_and_help_still_leads_back_to_it() {
     let mut u = first_run();
     let s = settle(&mut u);
-    assert!(has_text(&s, "Getting started"));
-    for tip in ["Draw a frame", "Add auto layout", "Make a component", "Prototype", "Share with a code", "Export"] {
-        assert!(has_text(&s, tip), "{tip}");
+    for gone in ["Getting started", "Draw a frame", "Join with a code", "Code or invite link"] {
+        assert!(!has_text(&s, gone), "{gone}");
     }
-    // Shortcuts come from the keymap.
-    let key = crate::home::shortcut("layout.add").unwrap();
-    assert!(has_text(&s, &key), "the auto layout shortcut {key:?}");
-    // The close button is named, and closes the card.
-    u.ctx.enable_accesskit();
-    u.frame(vec![]);
-    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
-    let close = nodes.iter().map(|(_, n)| n).find(|n| n.label().is_some_and(|l| l.starts_with("Hide these tips"))).expect("a named close button");
-    let b = close.bounds().unwrap();
-    click(&mut u, Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32));
-    assert!(u.app.session.prefs.getting_started_dismissed);
-    let s = settle(&mut u);
-    assert!(!has_text(&s, "Getting started") && !has_text(&s, "Draw a frame"));
     assert!(has_text(&s, "Start from a template"), "the rest of the screen stays");
-    // The preference is kept with the others, so it stays closed next time.
-    let kept: figcraft_engine::Prefs = serde_json::from_value(serde_json::to_value(&u.app.session.prefs).unwrap()).unwrap();
-    assert!(kept.getting_started_dismissed);
     // Help ▸ Getting started: back on the home screen, from wherever.
     u.app.run("file.new", json!({}));
     u.app.ui.home = false;
     u.app.ui.home_view.section = Section::Templates;
     crate::menus::invoke(&mut u.app, "help.gettingStarted");
-    assert!(u.app.ui.home && u.app.ui.home_view.section == Section::Recents && !u.app.session.prefs.getting_started_dismissed);
-    assert!(has_text(&settle(&mut u), "Getting started"));
+    assert!(u.app.ui.home && u.app.ui.home_view.section == Section::Recents);
 }
 
 #[test]
@@ -916,4 +913,134 @@ fn a_jam_file_is_a_document_open_and_drops_take() {
         let path = std::path::Path::new(name);
         assert!(crate::open::opens(path) && crate::open::is_document(path), "{name}");
     }
+}
+
+/// A square PNG of one colour (what the page's server would hand over, small).
+fn png(side: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(side, side, image::Rgba(rgba));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+fn picture_meshes(s: &[Shape]) -> usize {
+    s.iter().filter(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default() && m.vertices.len() > 40)).count()
+}
+
+#[test]
+fn the_sidebar_shows_the_signed_in_account_with_its_picture_or_initials() {
+    let mut u = first_run();
+    u.app.ui.home = true;
+    let s = shapes(&mut u);
+    assert!(!has_text(&s, "Ada Lovelace"), "signed out: the app's name, not a person's");
+    u.app.session.execute("account.set", &json!({"signedIn": true, "email": "ada@example.com", "name": "Ada Lovelace"})).unwrap();
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Ada Lovelace"), "their name tops the sidebar");
+    assert!(has_text(&s, "AL"), "their initials until the picture is in");
+    assert_eq!(picture_meshes(&s), 0);
+    // The picture arrives: a circle of it replaces the initials.
+    let ctx = u.ctx.clone();
+    assert!(u.app.set_account_picture(&ctx, &png(200, [0xE0, 0x40, 0x40, 0xFF])));
+    let s = shapes(&mut u);
+    assert_eq!(picture_meshes(&s), 1, "the picture is drawn");
+    assert!(!has_text(&s, "AL"));
+    // Bytes that are not a picture leave the initials (and drop the old picture).
+    for junk in [&b""[..], b"not an image", &[0xFF; 600_000]] {
+        assert!(!u.app.set_account_picture(&ctx, junk));
+    }
+    let s = shapes(&mut u);
+    assert_eq!(picture_meshes(&s), 0);
+    assert!(has_text(&s, "AL"));
+    // Signing out takes the person off the sidebar.
+    assert!(u.app.set_account_picture(&ctx, &png(8, [0, 0, 0, 0xFF])));
+    u.app.session.execute("account.set", &json!({"signedIn": false})).unwrap();
+    let s = shapes(&mut u);
+    assert!(!has_text(&s, "Ada Lovelace") && picture_meshes(&s) == 0);
+}
+
+#[test]
+fn the_top_bar_names_the_section_and_starts_files() {
+    let mut u = first_run();
+    u.app.ui.home = true;
+    let s = shapes(&mut u);
+    for pill in ["New design file", "New board", "Open file"] {
+        assert!(has_text(&s, pill), "{pill}");
+    }
+    click(&mut u, text_center(&s, "New board"));
+    assert_eq!(u.app.session.docs.len(), 1, "a board was made");
+    assert!(!u.app.ui.home, "and the editor shows it");
+}
+
+fn toast_text(u: &Ui) -> String {
+    u.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+}
+
+#[test]
+fn the_sidebar_rows_go_where_they_can_and_say_when_they_cannot() {
+    let mut u = first_run();
+    let s = shapes(&mut u);
+    // Resources are the templates; the workspace is your online files.
+    click(&mut u, text_center(&s, "Resources"));
+    assert_eq!(u.app.ui.home_view.section, Section::Templates);
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "Your workspace"));
+    assert_eq!(u.app.ui.home_view.section, Section::Online);
+    // What FigCraft has no feature for says so instead of doing nothing.
+    for (row, said) in [
+        ("Trash", "There's no trash in FigCraft yet."),
+        ("Drafts", "Drafts aren't in FigCraft yet: files live on this computer or on a server."),
+        ("Team folder", "Starring isn't in FigCraft yet."),
+        ("Upgrade", "Everything in FigCraft is included: it's free and open source."),
+        ("See what's included", "Everything in FigCraft is included: it's free and open source."),
+    ] {
+        let s = shapes(&mut u);
+        click(&mut u, text_center(&s, row));
+        assert_eq!(toast_text(&u), said, "{row}");
+        u.app.ui.toast = None;
+    }
+}
+
+#[test]
+fn a_signed_in_workspace_is_the_accounts_team_with_the_plan_it_chose() {
+    let mut u = first_run();
+    u.app
+        .session
+        .execute(
+            "account.set",
+            &json!({"signedIn": true, "email": "ada@example.com", "name": "Ada", "profile": {"plan": "professional", "onboarded": true}}),
+        )
+        .unwrap();
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Ada's team") && has_text(&s, "Pro") && !has_text(&s, "Free"));
+}
+
+#[test]
+fn the_files_row_has_the_tabs_and_filters_and_each_does_what_it_can() {
+    let mut u = first_run();
+    let s = settle(&mut u);
+    for text in ["Recently viewed", "Shared files", "Shared folders", "All organizations", "All files"] {
+        assert!(has_text(&s, text), "{text}");
+    }
+    // Shared folders: no such thing yet, and it says so.
+    click(&mut u, text_center(&s, "Shared folders"));
+    assert_eq!(toast_text(&u), "Shared folders aren't in FigCraft yet.");
+    // Shared files: the files shared online.
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "Shared files"));
+    assert_eq!(u.app.ui.home_view.section, Section::Online);
+}
+
+#[test]
+fn the_all_files_filter_keeps_design_files_or_boards() {
+    let mut u = first_run();
+    let s = shapes(&mut u);
+    click(&mut u, text_center(&s, "All files"));
+    let s = shapes(&mut u);
+    let entry = |s: &[Shape], item: &str| texts(s).into_iter().map(|(t, _, _)| t).find(|t| t.ends_with(item)).unwrap_or_else(|| panic!("no {item}"));
+    entry(&s, "Design files");
+    let boards = entry(&s, "Boards");
+    click(&mut u, text_center(&s, &boards));
+    assert_eq!(u.app.ui.home_view.files_filter, Some(figcraft_doc::FileKind::Board));
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Boards"), "the button names the filter");
 }

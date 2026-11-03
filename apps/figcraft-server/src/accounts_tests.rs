@@ -228,6 +228,30 @@ fn id_token(claims: &serde_json::Value) -> String {
 }
 
 #[test]
+fn google_pictures_only_come_from_googles_image_hosts() {
+    let ok = "https://lh3.googleusercontent.com/a/ACg8ocK=s96-c";
+    assert_eq!(google::picture_url(ok), ok);
+    for bad in [
+        "",
+        "http://lh3.googleusercontent.com/a/x",
+        "https://evil.example/a.googleusercontent.com",
+        "https://lh3.googleusercontent.com@evil.example/a",
+        "https://lh3.googleusercontent.com:8080/a",
+        "https://googleusercontent.com/a",
+        "https://evil.example/?u=lh3.googleusercontent.com",
+        "https://lh3.googleusercontent.com/a b",
+        "file:///etc/passwd",
+    ] {
+        assert_eq!(google::picture_url(bad), "", "{bad}");
+    }
+    assert!(google::fetch_picture("https://evil.example/x").is_err(), "the server won't fetch it");
+    let mut claims = serde_json::json!({"iss":"https://accounts.google.com","aud":"client-1","sub":"1234","exp":2000,"email":"gi@example.com","email_verified":true,"name":"Gi","picture":ok});
+    assert_eq!(google::identity(&id_token(&claims), "client-1", 1000).unwrap().picture, ok);
+    claims["picture"] = "https://evil.example/p.png".into();
+    assert_eq!(google::identity(&id_token(&claims), "client-1", 1000).unwrap().picture, "", "another host's picture is dropped");
+}
+
+#[test]
 fn google_id_tokens_are_checked() {
     let good = serde_json::json!({"iss":"https://accounts.google.com","aud":"client-1","sub":"1234","exp":2000,"email":"gi@example.com","email_verified":true,"name":"Gi"});
     let who = google::identity(&id_token(&good), "client-1", 1000).unwrap();
@@ -270,12 +294,15 @@ fn google_takes_over_an_unverified_email() {
     let t = token(&handle(&c, &post("/login", "email=gi%40example.com&password=squatter-pass", None)));
     let mut a = c.accounts.lock().unwrap();
     // …then its owner signs in with Google: same account, the squatter's password and session go.
-    let u = a.google_user("g-1", "gi@example.com", "Gi").unwrap();
+    let u = a.google_user("g-1", "gi@example.com", "Gi", "").unwrap();
     assert!(u.password.is_none() && u.google.as_deref() == Some("g-1"));
     assert!(a.session(&t).is_none());
-    assert_eq!(a.google_user("g-1", "changed@example.com", "Gi").unwrap().id, u.id, "found by Google account");
+    assert_eq!(a.google_user("g-1", "changed@example.com", "Gi", "").unwrap().id, u.id, "found by Google account");
     assert_eq!(a.lookup("gi@example.com"), accounts::Lookup::GoogleOnly);
-    assert_ne!(a.google_user("g-2", "new@example.com", "").unwrap().id, u.id);
+    assert_ne!(a.google_user("g-2", "new@example.com", "", "").unwrap().id, u.id);
+    let pic = "https://lh3.googleusercontent.com/a/x=s96-c";
+    assert_eq!(a.google_user("g-1", "gi@example.com", "Gi", pic).unwrap().picture, pic, "kept at sign-in");
+    assert_eq!(a.google_user("g-1", "gi@example.com", "Gi", "").unwrap().picture, "", "and gone when Google has none");
     drop(a);
     // Without a Google client: no button, no flow.
     assert_eq!(handle(&c, &get("/auth/google", "", None)).status, 404);

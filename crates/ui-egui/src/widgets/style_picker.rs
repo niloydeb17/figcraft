@@ -184,6 +184,23 @@ pub fn open_for_selection(app: &mut FigApp, slot: StyleSlot, style: Option<&str>
     app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
 }
 
+/// Make a style from the selection's `slot` (the colour picker's "+") and open the picker on it,
+/// its name selected.
+pub fn create_from_selection(app: &mut FigApp, slot: StyleSlot) {
+    let ids = app.session.selection();
+    let name = app.session.doc().map(|d| next_name(d, slot.default_name())).unwrap_or_else(|_| slot.default_name().to_string());
+    let made = app.run("style.create", json!({"type": slot.create_type(), "name": name, "from": ids.first()}));
+    let edit = made.as_ref().and_then(|v| v["id"].as_str()).map(|id| Editing {
+        id: id.to_string(),
+        name: name.clone(),
+        description: String::new(),
+        focus: true,
+    });
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
+    app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
+}
+
 fn editing(s: &Style) -> Editing {
     Editing { id: s.id.clone(), name: s.name.clone(), description: s.description.clone(), focus: false }
 }
@@ -644,6 +661,246 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
     });
 }
 
+/// The kit's Libraries tab for a paint slot: a search row, the library filter with the list/grid
+/// switch, then this file's and the libraries' colour styles (by folder) and colour variables.
+fn kit_listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
+    let t = Tokens::get(ui.ctx());
+    let slot = p.slot;
+    let w = 240.0;
+    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let link = link_of(app, doc, &p.ids, slot);
+    let applied = link.clone().flatten().map(|id| Key::of_local(doc, &id));
+    let grid = app.ui.style_grid;
+    let hairline = |ui: &Ui, row: Rect| {
+        ui.painter().rect_filled(Rect::from_min_max(pos2(row.min.x, row.max.y - 1.0), row.max), CornerRadius::ZERO, t.border);
+    };
+    // Search: the glyph in a 40-wide cell, then the field.
+    let (row, _) = ui.allocate_exact_size(vec2(w, 41.0), Sense::hover());
+    hairline(ui, row);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(row.min.x + 24.0, row.min.y + 20.0), vec2(16.0, 16.0)), Icon::Search, t.icon);
+    let mut field = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_size(pos2(row.min.x + 40.0, row.min.y + 8.0), vec2(190.0, 24.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let r =
+        field.add(egui::TextEdit::singleline(&mut p.query).hint_text(tr("Search")).font(regular(11.0)).frame(egui::Frame::NONE).desired_width(190.0));
+    crate::widgets::select_all_on_focus(&field, &r, &p.query);
+    if !r.has_focus() && !crate::a11y::field_focused(ui.ctx()) {
+        r.request_focus();
+    }
+    let q = p.query.trim().to_lowercase();
+    // The library filter and the list / grid switch.
+    let (row, _) = ui.allocate_exact_size(vec2(w, 42.0), Sense::hover());
+    hairline(ui, row);
+    let libs = crate::variable_ui::libraries(app, doc);
+    let filter_id = Id::unique("cp_library_filter");
+    let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+    if filter != "file" && !filter.is_empty() && !libs.iter().any(|l| l.manifest.id == filter) {
+        filter.clear();
+    }
+    let label = match filter.as_str() {
+        "" => tr("All libraries").to_string(),
+        "file" => tr("This file").to_string(),
+        id => libs.iter().find(|l| l.manifest.id == id).map(|l| l.manifest.name.clone()).unwrap_or_default(),
+    };
+    let label_w = ui.painter().layout_no_wrap(label.clone(), regular(11.0), t.text).size().x;
+    let drop = crate::colorpicker::library_filter_button(
+        ui,
+        Rect::from_min_size(pos2(row.min.x + 8.0, row.min.y + 8.0), vec2((label_w + 32.0).max(60.0), 24.0)),
+        &label,
+    );
+    crate::right::menu_popup(&drop).show(|ui| {
+        let set = |ui: &mut Ui, id: &str, name: &str| {
+            if crate::right::menu_check(ui, filter == id, name, "") {
+                ui.data_mut(|d| d.insert_temp(filter_id, id.to_string()));
+                ui.close();
+            }
+        };
+        set(ui, "", tr("All libraries"));
+        set(ui, "file", tr("This file"));
+        for l in &libs {
+            set(ui, &l.manifest.id, &l.manifest.name);
+        }
+    });
+    let mut x = row.max.x - 12.0 - 24.0;
+    let (icon, tip) = if grid { (Icon::ViewList, tr("Show as list")) } else { (Icon::ViewGrid, tr("Show as grid")) };
+    if crate::colorpicker::library_button(ui, Rect::from_min_size(pos2(x, row.min.y + 9.0), vec2(24.0, 24.0)), Id::unique("cp_lib_grid"), icon, tip) {
+        out.act = Some(Act::ToggleView);
+    }
+    if link != Some(None) {
+        x -= 28.0;
+        if crate::colorpicker::library_button(
+            ui,
+            Rect::from_min_size(pos2(x, row.min.y + 9.0), vec2(24.0, 24.0)),
+            Id::unique("cp_lib_detach"),
+            Icon::Detach,
+            tr("Detach style"),
+        ) {
+            out.act = Some(Act::Detach);
+        }
+    }
+    let mut sources: Vec<(Option<&PublishedLibrary>, Vec<&Style>)> = Vec::new();
+    if filter.is_empty() || filter == "file" {
+        sources.push((None, offered(doc, None, slot, &q)));
+    }
+    for l in &libs {
+        if filter.is_empty() || filter == l.manifest.id {
+            let list = offered(doc, Some(l), slot, &q);
+            if !list.is_empty() {
+                sources.push((Some(l.as_ref()), list));
+            }
+        }
+    }
+    let colors = {
+        // Variables scoped to every selected layer's fill (or stroke), as the Design panel's pickers offer.
+        let scopes: Vec<_> = p.ids.iter().filter_map(|id| figcraft_engine::cmd::variables::field_scope(doc, *id, slot.key())).collect();
+        crate::variable_ui::groups(doc, &libs, |lib, v| {
+            v.kind == VariableType::Color
+                && (q.is_empty() || v.name.to_lowercase().contains(&q))
+                && scopes.iter().all(|s| v.in_scope(s))
+                && match (&filter[..], lib) {
+                    ("", _) => true,
+                    ("file", l) => l.is_none(),
+                    (id, Some(l)) => l.manifest.id == id,
+                    (_, None) => false,
+                }
+        })
+    };
+    let caption = |ui: &mut Ui, text: &str| -> Response {
+        let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+        crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 16.0, r.center().y), text, regular(11.0), t.text, w - 32.0);
+        resp
+    };
+    egui::ScrollArea::vertical().id_salt("style_picker_scroll").max_height(304.0).auto_shrink([false, true]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        ui.add_space(8.0);
+        if sources.iter().all(|(_, l)| l.is_empty()) && colors.is_empty() {
+            let any = library::local_styles(doc).any(|s| slot.holds(&s.kind));
+            let hint = if any { tr("No matching styles") } else { tr("No styles yet. Click + to create one from the selection.") };
+            let (r, _) = ui.allocate_exact_size(vec2(w, 32.0), Sense::hover());
+            ui.painter().text(pos2(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, hint, regular(11.0), t.text_secondary);
+        }
+        for (lib, list) in &sources {
+            if let Some(l) = lib {
+                caption(ui, &l.manifest.name);
+            } else if list.is_empty() {
+                continue;
+            } else if sources.len() > 1 {
+                caption(ui, tr("This file"));
+            }
+            let lib_id = lib.map(|l| l.manifest.id.clone());
+            for (f, styles) in by_folder(list.iter().copied()) {
+                let fold = match &lib_id {
+                    Some(id) => format!("{id}/{f}"),
+                    None => f.to_string(),
+                };
+                if !f.is_empty() {
+                    // Searching shows every match, folders open.
+                    let closed = q.is_empty() && app.ui.style_folds.contains(&fold);
+                    let label = f.split('/').map(str::trim).collect::<Vec<_>>().join(" / ");
+                    if caption(ui, &label).clicked() && q.is_empty() {
+                        out.act = Some(Act::ToggleFolder(fold.clone()));
+                    }
+                    if closed {
+                        continue;
+                    }
+                }
+                let keyed: Vec<(&Style, Key)> = styles.into_iter().map(|s| (s, Key { library: lib_id.clone(), style: s.id.clone() })).collect();
+                if grid {
+                    let per_row = 6usize;
+                    for chunk in keyed.chunks(per_row) {
+                        let (r, _) = ui.allocate_exact_size(vec2(w, 32.0), Sense::hover());
+                        for (i, (s, key)) in chunk.iter().enumerate() {
+                            let cell = Rect::from_min_size(pos2(r.min.x + 16.0 + 32.0 * i as f32, r.min.y + 4.0), vec2(24.0, 24.0));
+                            let resp = ui.interact(cell, ui.scope_id().with(("cp_style_cell", &key.library, &key.style)), Sense::click());
+                            crate::colorpicker::library_swatch(ui, cell, s);
+                            if applied.as_ref() == Some(key) {
+                                ui.painter().rect_stroke(
+                                    cell.expand(2.0),
+                                    CornerRadius::same(5),
+                                    Stroke::new(2.0, crate::theme::ACCENT),
+                                    egui::StrokeKind::Inside,
+                                );
+                            } else if resp.hovered() {
+                                ui.painter().rect_stroke(
+                                    cell.expand(2.0),
+                                    CornerRadius::same(5),
+                                    Stroke::new(1.0, t.border_strong),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            let resp = resp.on_hover_text(s.name.clone());
+                            react(&resp, key.clone(), key.library.is_none(), out);
+                        }
+                    }
+                } else {
+                    for (s, key) in keyed {
+                        let on = applied.as_ref() == Some(&key);
+                        let editable = key.library.is_none();
+                        kit_style_row(ui, s, key, on, editable, w, out);
+                    }
+                }
+            }
+        }
+        for (lib, c, vars) in &colors {
+            let text = match lib {
+                Some(l) => format!("{} · {}", l.manifest.name, c.name),
+                None => c.name.clone(),
+            };
+            caption(ui, &text);
+            let all = lib.map_or(&doc.variables, |l| &l.doc.variables);
+            for v in vars {
+                if kit_variable_row(ui, all, v, w) {
+                    out.act = Some(Act::Bind(crate::variable_ui::Pick { library: lib.map(|l| l.manifest.id.clone()), id: v.id.clone() }));
+                }
+            }
+        }
+        ui.add_space(8.0);
+    });
+}
+
+/// A colour style's row: its swatch in a 24-point cell, its name; raised in the selected colour
+/// while applied, an edit button on hover.
+fn kit_style_row(ui: &mut Ui, s: &Style, key: Key, applied: bool, editable: bool, w: f32, out: &mut Frame) {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    let edit_r = Rect::from_center_size(pos2(r.max.x - 20.0, r.center().y), vec2(24.0, 24.0));
+    let hovered = resp.hovered() || ui.rect_contains_pointer(edit_r);
+    if applied {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.selected_row);
+    } else if hovered {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+    }
+    crate::colorpicker::library_swatch(ui, Rect::from_min_size(pos2(r.min.x + 20.0, r.min.y + 8.0), vec2(16.0, 16.0)), s);
+    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 48.0, r.center().y), leaf(&s.name), regular(11.0), t.text, w - 48.0 - 40.0);
+    if hovered
+        && editable
+        && crate::colorpicker::library_button(ui, edit_r, ui.scope_id().with(("cp_style_edit", &s.id)), Icon::Adjust, tr("Edit style"))
+    {
+        out.act = Some(Act::Edit(s.id.clone()));
+        return;
+    }
+    let resp = if s.description.is_empty() { resp } else { resp.on_hover_text(s.description.clone()) };
+    react(&resp, key, editable, out);
+}
+
+/// A colour variable's row in the Libraries tab: its swatch, its name; true when clicked.
+fn kit_variable_row(ui: &mut Ui, vars: &figcraft_doc::Variables, v: &figcraft_doc::Variable, w: f32) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+    }
+    let sw = Rect::from_min_size(pos2(r.min.x + 20.0, r.min.y + 8.0), vec2(16.0, 16.0));
+    match vars.resolve(&v.id, &std::collections::BTreeMap::new()) {
+        Some(figcraft_doc::VariableValue::Color(c)) => crate::colorpicker::library_swatch_paint(ui, sw, &Paint::solid(c)),
+        _ => icons::paint(ui.painter(), sw, Icon::Variable, t.icon),
+    }
+    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 48.0, r.center().y), &v.name, regular(11.0), t.text, w - 48.0 - 16.0);
+    resp.clicked()
+}
+
 /// One property row in the editor (a paint, an effect, a grid); paints open the colour picker.
 fn property_row(ui: &mut Ui, label: &str, paint: Option<&Paint>, slot: StyleSlot) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1093,6 +1350,16 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let title = if p.edit.is_some() { tr("Edit style") } else { p.slot.title() };
     let mut pop = app.ui.style_picker_popover.take().unwrap_or_else(|| Popover::new("style_picker_area", title).pad(PAD).surface(Surface::Menu));
     pop.title = title.to_string();
+    // A paint's styles share the colour picker's header: its Custom tab goes back to the colours.
+    let tabbed = p.slot.paints() && p.edit.is_none();
+    let kit_look = tabbed;
+    pop.header_tabs(
+        if tabbed { vec![tr("Custom").to_string(), tr("Libraries").to_string()] } else { Vec::new() },
+        1,
+        tabbed.then(|| tr("New style").to_string()),
+    );
+    // The Libraries tab is the light panel with no margin; the other lists keep the dark menu.
+    pop.set_look(if kit_look { Surface::Panel } else { Surface::Menu }, if kit_look { 0.0 } else { PAD });
     // Clicks in the colour picker editing this picker's style, in the variable picker binding one
     // of its fields, or in a menu the editor opened, keep it open.
     let picker_rect =
@@ -1102,10 +1369,24 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let closed = pop.show(ctx, Open::At(pos2(x, y)), Hold { rects: &holds, escape: variables.is_some() || picker_rect.is_some() }, |ui| {
         if p.edit.is_some() {
             editor(ui, &doc, &mut p, &mut out);
+        } else if kit_look {
+            kit_listing(app, ui, &doc, &mut p, &mut out);
         } else {
             listing(app, ui, &doc, &mut p, &mut out);
         }
     });
+    if tabbed && pop.tab_clicked == Some(0) {
+        let target = ctx
+            .data(|d| d.get_temp::<PickerTarget>(crate::colorpicker::return_id()))
+            .filter(|t| matches!(t, PickerTarget::Paint { ids, .. } if *ids == p.ids))
+            .unwrap_or_else(|| PickerTarget::Paint { fills: p.slot != StyleSlot::Stroke, index: 0, ids: p.ids.clone() });
+        app.ui.style_picker_popover = None;
+        app.open_picker(target, None);
+        return;
+    }
+    if tabbed && pop.plus_clicked {
+        out.act = Some(Act::Create);
+    }
     let mut close = closed;
     let ids = p.ids.clone();
     let slot = p.slot;

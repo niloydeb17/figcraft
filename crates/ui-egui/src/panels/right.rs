@@ -25,6 +25,7 @@ pub(crate) mod dev_panel;
 mod effects;
 mod inspect;
 mod menu;
+mod motion;
 mod page;
 mod paints;
 mod stroke;
@@ -170,10 +171,15 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     // Prototype.
     let dev = app.ui.right_tab == RightTab::Inspect;
     let draw = app.ui.draw_mode && app.ui.right_tab == RightTab::Design;
+    // The Prototype mode with the motion timeline open is the Motion mode: it names itself, with
+    // a Beta badge, as the incumbent's does.
+    let motion = motion_mode(app);
     let tab_list: Vec<(&str, bool, Option<RightTab>)> = if dev {
         vec![(tr("Inspect"), !app.ui.dev.plugins_tab, None), (tr("Plugins"), app.ui.dev.plugins_tab, None)]
     } else if draw {
         vec![(tr("Draw"), true, Some(RightTab::Design))]
+    } else if motion {
+        vec![(tr("Motion"), true, Some(RightTab::Prototype))]
     } else {
         vec![
             (tr("Design"), app.ui.right_tab == RightTab::Design, Some(RightTab::Design)),
@@ -185,10 +191,17 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
         let r = Rect::from_min_size(pos2(x, tab_y - 12.0), vec2(galley.size().x + 15.0, 24.0));
         let resp = ui.interact(r, ui.scope_id().with(("rtab", label)), Sense::click());
         a11y::tab(&resp, label, active);
-        if active && !draw {
+        if active && !draw && !motion {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
         ui.painter().galley(pos2(r.min.x + 8.0, r.center().y - galley.size().y / 2.0), galley, if active { t.text } else { t.text_secondary });
+        if motion {
+            // The Beta badge: its label in a rounded outline.
+            let badge = ui.painter().layout_no_wrap(tr("Beta").into(), regular(11.0), t.text);
+            let br = Rect::from_min_size(pos2(r.max.x - 2.0, r.center().y - 9.0), vec2(badge.size().x + 10.0, 18.0));
+            ui.painter().rect_stroke(br, CornerRadius::same(5), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            ui.painter().galley(pos2(br.min.x + 5.0, br.center().y - badge.size().y / 2.0), badge, t.text);
+        }
         if resp.clicked() {
             match tab {
                 Some(tab) => {
@@ -268,6 +281,7 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
             // The Frame tool shows the frame presets.
             RightTab::Design if app.session.tool.tool == figcraft_engine::ToolId::Frame => crate::frame_presets::panel(app, ui),
             RightTab::Design => design(app, ui),
+            RightTab::Prototype if motion => motion::panel(app, ui),
             RightTab::Prototype => crate::proto_panel::prototype(app, ui),
             RightTab::Inspect => inspect(app, ui),
         }
@@ -775,4 +789,9 @@ fn pretty(s: &str) -> String {
         "TopBottom" => "Top & bottom".into(),
         other => other.to_string(),
     }
+}
+
+/// Whether the right panel is in the Motion mode: the Prototype mode with the motion timeline open.
+pub(crate) fn motion_mode(app: &FigApp) -> bool {
+    app.ui.right_tab == RightTab::Prototype && app.session.ds().is_ok_and(|d| d.motion.panel)
 }

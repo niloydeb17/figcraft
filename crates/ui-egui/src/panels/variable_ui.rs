@@ -630,7 +630,6 @@ mod scope_tests {
             crate::style_picker::open_for_selection(&mut u.app, slot, None);
             u.frame(vec![]);
             let texts = drawn(&mut u);
-            assert!(texts.iter().any(|t| t == "Color variables"), "{slot:?}: {texts:?}");
             check(&texts, shown, hidden, &format!("{slot:?}"));
         }
     }

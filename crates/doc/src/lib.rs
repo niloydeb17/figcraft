@@ -17,6 +17,7 @@ pub mod geometry;
 pub mod handoff;
 pub mod ids;
 pub mod library;
+pub mod motion;
 pub mod node;
 pub mod props;
 pub mod proto;
@@ -1303,6 +1304,8 @@ mod guides_tests;
 mod handoff_tests;
 #[cfg(test)]
 mod ids_tests;
+#[cfg(test)]
+mod motion_tests;
 #[cfg(test)]
 mod print_tests;
 #[cfg(test)]

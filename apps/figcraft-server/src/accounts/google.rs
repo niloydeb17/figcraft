@@ -51,6 +51,52 @@ pub struct Identity {
     pub sub: String,
     pub email: String,
     pub name: String,
+    /// The profile picture's address (empty when Google gave none, or one not on Google's image hosts).
+    pub picture: String,
+}
+
+/// `url` when it is a profile picture on one of Google's image hosts over HTTPS, else empty: the
+/// server fetches it for the browser ([`fetch_picture`]), so it must not be made to reach anywhere.
+pub fn picture_url(url: &str) -> String {
+    let ok = url.len() <= 512
+        && !url.contains(char::is_whitespace)
+        && !url.contains(char::is_control)
+        && url
+            .strip_prefix("https://")
+            .and_then(|rest| rest.split(['/', '?', '#']).next())
+            .is_some_and(|host| host.ends_with(".googleusercontent.com") && !host.contains(['@', ':']));
+    if ok { url.to_string() } else { String::new() }
+}
+
+/// The most a picture may weigh.
+const PICTURE_MAX: u64 = 256 * 1024;
+
+/// The bytes and media type of the picture at `url` ([`picture_url`] checked it).
+pub fn fetch_picture(url: &str) -> Result<(Vec<u8>, String), String> {
+    if picture_url(url).is_empty() {
+        return Err("not a Google picture".into());
+    }
+    let config = ureq::Agent::config_builder().http_status_as_error(false).timeout_global(Some(Duration::from_secs(10))).max_redirects(0).build();
+    let agent = ureq::Agent::new_with_config(config);
+    let mut reply = agent.get(url).call().map_err(|e| format!("can't reach Google: {e}"))?;
+    if !reply.status().is_success() {
+        return Err(format!("Google answered {}", reply.status()));
+    }
+    let kind = reply
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !matches!(kind.as_str(), "image/jpeg" | "image/png" | "image/webp" | "image/gif") {
+        return Err("not a picture".into());
+    }
+    let bytes = reply.body_mut().with_config().limit(PICTURE_MAX).read_to_vec().map_err(|e| format!("can't read the picture: {e}"))?;
+    Ok((bytes, kind))
 }
 
 /// Start a sign-in.
@@ -114,6 +160,8 @@ struct Claims {
     email_verified: Option<bool>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    picture: Option<String>,
 }
 
 /// The identity in an ID token from Google's token endpoint, checked for `client` at time `now`.
@@ -134,5 +182,6 @@ pub fn identity(id_token: &str, client: &str, now: u64) -> Result<Identity, Stri
         return Err("The ID token can't be read.".into());
     }
     let email = c.email.filter(|_| c.email_verified == Some(true)).ok_or("Google hasn't verified this account's email.")?;
-    Ok(Identity { sub: c.sub, email, name: c.name.unwrap_or_default() })
+    let picture = c.picture.as_deref().map(picture_url).unwrap_or_default();
+    Ok(Identity { sub: c.sub, email, name: c.name.unwrap_or_default(), picture })
 }

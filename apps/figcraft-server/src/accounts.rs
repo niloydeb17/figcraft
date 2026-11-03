@@ -67,6 +67,9 @@ pub struct User {
     /// The Google account (`sub`) it signs in with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google: Option<String>,
+    /// The profile picture Google gave at the last sign-in (an address on its image hosts).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub picture: String,
     pub created: u64,
     #[serde(default)]
     pub last_login: u64,
@@ -354,6 +357,7 @@ impl Accounts {
             email,
             password,
             google,
+            picture: String::new(),
             created: t,
             last_login: 0,
             disabled: false,
@@ -372,7 +376,12 @@ impl Accounts {
     /// it, else the one with that email (now linked; any password it had is dropped and its
     /// sessions end, since an email nobody verified may have been taken by someone else), else a
     /// new one when sign-up is open.
-    pub fn google_user(&mut self, sub: &str, email: &str, name: &str) -> Result<User, String> {
+    pub fn google_user(&mut self, sub: &str, email: &str, name: &str, picture: &str) -> Result<User, String> {
+        let user = self.google_account(sub, email, name)?;
+        self.keep_picture(&user.id, picture)
+    }
+
+    fn google_account(&mut self, sub: &str, email: &str, name: &str) -> Result<User, String> {
         if let Some(u) = self.users.iter().find(|u| u.google.as_deref() == Some(sub)) {
             return if u.disabled { Err(DISABLED.into()) } else { Ok(u.clone()) };
         }
@@ -387,6 +396,18 @@ impl Accounts {
         self.sessions.retain(|_, s| s.user != user.id);
         self.save()?;
         Ok(user)
+    }
+
+    /// Remember `picture` as `user`'s (what Google says now); the account as it is then.
+    fn keep_picture(&mut self, user: &str, picture: &str) -> Result<User, String> {
+        let Some(u) = self.users.iter_mut().find(|u| u.id == user) else { return Err("no such account".into()) };
+        if u.picture != picture {
+            u.picture = picture.to_string();
+            let user = u.clone();
+            self.save_users()?;
+            return Ok(user);
+        }
+        Ok(u.clone())
     }
 
     /// Sign `user` in: a new session token (only its hash is kept).

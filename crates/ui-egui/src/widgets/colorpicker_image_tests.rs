@@ -197,10 +197,10 @@ fn press(u: &mut Ui, at: Pos2) {
     }
 }
 
-/// Click the picker's Image tab: the sixth of its 30 wide cells, under the title.
+/// Click the picker's Image tab: the fourth of the toolbar's 24-point buttons, under the header.
 fn click_image_tab(u: &mut Ui) {
     let picker = u.ctx.memory(|m| m.area_rect(window_id())).unwrap();
-    press(u, picker.min + egui::vec2(177.0, 52.0));
+    press(u, picker.min + egui::vec2(104.0, 60.0));
 }
 
 fn click_upload(u: &mut Ui) {

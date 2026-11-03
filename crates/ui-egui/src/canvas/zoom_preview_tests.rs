@@ -79,6 +79,7 @@ fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Job {
         outlined: vec![],
         skip: vec![],
         solo: None,
+        lifted: vec![],
         proof: false,
         dots: None,
         uid,

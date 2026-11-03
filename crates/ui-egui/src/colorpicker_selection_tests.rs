@@ -99,12 +99,12 @@ fn wrapped_page_colour_swatches_stay_inset_inside_the_picker() {
     // The picker is the only floating window open: its area is the picker's own id, which the style
     // picker also looks up to tell a press in here from one outside.
     let picker = u.ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())).expect("the picker is open");
-    // A swatch is a 14 pt square with a 1 pt outline.
+    // A swatch is a 16 pt square with a 1 pt outline.
     let swatches: Vec<egui::Rect> = out
         .shapes
         .iter()
         .filter_map(|c| match &c.shape {
-            Shape::Rect(r) if r.stroke.width == 1.0 && (r.rect.width() - 14.0).abs() < 0.01 && (r.rect.height() - 14.0).abs() < 0.01 => Some(r.rect),
+            Shape::Rect(r) if r.stroke.width == 1.0 && (r.rect.width() - 16.0).abs() < 0.01 && (r.rect.height() - 16.0).abs() < 0.01 => Some(r.rect),
             _ => None,
         })
         .filter(|r| picker.contains_rect(*r))

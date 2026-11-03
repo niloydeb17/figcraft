@@ -16,3 +16,13 @@ fn me_becomes_the_account() {
     assert_eq!(params(200, "<!doctype html>"), None);
     assert_eq!(params(200, r#"{"signedIn":true,"user":{}}"#), None);
 }
+
+#[test]
+fn me_says_whether_there_is_a_picture() {
+    use crate::account_me::has_picture;
+    assert!(has_picture(200, r#"{"signedIn":true,"user":{"email":"a@b.c","hasPicture":true}}"#));
+    assert!(!has_picture(200, r#"{"signedIn":true,"user":{"email":"a@b.c","hasPicture":false}}"#));
+    assert!(!has_picture(200, r#"{"signedIn":true,"user":{"email":"a@b.c"}}"#));
+    assert!(!has_picture(401, r#"{"signedIn":false}"#));
+    assert!(!has_picture(200, "<!doctype html>"));
+}

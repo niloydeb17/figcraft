@@ -46,8 +46,18 @@ fn covers(outer: &figcraft_render::View, inner: &figcraft_render::View) -> bool 
     o.x0 <= i.x0 + eps && o.y0 <= i.y0 + eps && o.x1 >= i.x1 - eps && o.y1 >= i.y1 - eps
 }
 
-pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_side: u32, dots: Option<figcraft_render::Dots>) {
-    let Ok(ds) = app.session.ds() else { return };
+/// Ask the worker for the current view when it isn't on its way already; with `lifted` (layers
+/// being dragged, see [`super::lift`]), the document the drag started from without them. Whether
+/// the request is an edit: the same page drawn from a changed document.
+pub(super) fn request_render(
+    app: &mut FigApp,
+    worker: &mut Worker,
+    ppp: f32,
+    max_texture_side: u32,
+    dots: Option<figcraft_render::Dots>,
+    lifted: Option<(Arc<figcraft_doc::Document>, Vec<NodeId>)>,
+) -> bool {
+    let Ok(ds) = app.session.ds() else { return false };
     let rect = app.canvas.rect;
     let (mut ox, mut oy) = ds.view.origin();
     let (scale, visible_w, visible_h) = if let Some(k) = ds.view.pixel_preview_scale() {
@@ -60,7 +70,12 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         (ds.view.zoom * f64::from(ppp), (rect.width() * ppp).ceil().max(1.0) as u32, (rect.height() * ppp).ceil().max(1.0) as u32)
     };
     // The edited text is drawn live (an IME composition included); the caret is an overlay.
-    let doc = app.preedit_view().map(|p| p.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    let (doc, skip) = match lifted {
+        Some((doc, ids)) => (doc, ids),
+        None => (app.preedit_view().map(|p| p.doc.clone()).unwrap_or_else(|| ds.doc.clone()), vec![]),
+    };
+    // With the motion timeline open (or playing), the canvas shows the playhead's moment.
+    let doc = if ds.motion.shows_motion() { motion_doc(&mut app.canvas.motion_doc, doc, ds.page, ds.motion.playhead) } else { doc };
     let outlined = if ds.view.outlines_selection { ds.selection.clone() } else { vec![] };
     let proof = ds.view.proof_srgb && !doc.color_profile.is_srgb();
     let outline_extras = figcraft_render::Outline { hidden: ds.view.outline_hidden, bounds: ds.view.outline_bounds, light: false };
@@ -81,7 +96,7 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         outline: ds.view.outlines,
         outline_extras,
         outlined: outlined.clone(),
-        skip: vec![],
+        skip: skip.clone(),
         solo: ds.focused(),
         fonts: figcraft_text::layout_generation(),
         proof,
@@ -92,12 +107,13 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         let same_content = JobKey { origin: previous.origin, size: previous.size, ..key.clone() } == *previous;
         let covers = cached_render_covers(previous_origin, previous.size, origin, visible, scale);
         if same_content && covers {
-            return;
+            return false;
         }
     }
     if app.canvas.submitted.as_ref() == Some(&key) {
-        return;
+        return false;
     }
+    let edit = app.canvas.submitted.as_ref().is_some_and(|p| p.page == key.page && p.doc != key.doc);
     let job = Job {
         doc,
         page: ds.page,
@@ -105,8 +121,9 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         outline: ds.view.outlines,
         outline_extras,
         outlined,
-        skip: vec![],
+        skip,
         solo: key.solo,
+        lifted: vec![],
         proof,
         dots,
         uid: ds.uid,
@@ -116,6 +133,26 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
     app.canvas.want_view = Some(job.view.clone());
     worker.submit(job);
     app.canvas.submitted = Some(key);
+    edit
+}
+
+/// `doc` as it looks `t` seconds into its timelines (itself when nothing on `page` moves), kept
+/// for as long as the document, page and moment stay the same.
+pub(crate) fn motion_doc(
+    cache: &mut Option<(usize, NodeId, u64, Arc<figcraft_doc::Document>)>,
+    doc: Arc<figcraft_doc::Document>,
+    page: NodeId,
+    t: f64,
+) -> Arc<figcraft_doc::Document> {
+    let key = (Arc::as_ptr(&doc) as usize, page, t.to_bits());
+    if let Some((d, p, at, out)) = cache.as_ref()
+        && (*d, *p, *at) == key
+    {
+        return out.clone();
+    }
+    let out = doc.at_time(page, t).map_or_else(|| doc.clone(), Arc::new);
+    *cache = Some((key.0, key.1, key.2, out.clone()));
+    out
 }
 
 /// Leave a 96-pixel reserve so the next render starts before a pan reaches a cached edge.

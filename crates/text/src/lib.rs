@@ -117,7 +117,7 @@ pub fn layout_node(n: &Node) -> Option<(std::sync::Arc<TextLayout>, f64)> {
     if t.path.is_some() {
         return Some((layout_cached(t, None, None), 0.0));
     }
-    let l = layout_cached(t, Some(n.width), Some(n.height));
+    let l = layout_node_at(n, Some(n.width), Some(n.height))?;
     let dy = match (t.auto_resize, t.align_v) {
         (TextAutoResize::WidthAndHeight | TextAutoResize::Height, _) => 0.0,
         (_, TextAlignV::Top) => 0.0,
@@ -125,6 +125,20 @@ pub fn layout_node(n: &Node) -> Option<(std::sync::Arc<TextLayout>, f64)> {
         (_, TextAlignV::Bottom) => n.height - l.height,
     };
     Some((l, dy))
+}
+
+/// Lay out a text node in a supplied box, including a maximum height on auto-sized text. Use the
+/// same truncation for measurement, canvas rendering and exports so the parent hugs what is shown.
+pub fn layout_node_at(n: &Node, width: Option<f64>, height: Option<f64>) -> Option<std::sync::Arc<TextLayout>> {
+    let NodeKind::Text(t) = &n.kind else { return None };
+    if matches!(t.auto_resize, TextAutoResize::Height | TextAutoResize::WidthAndHeight)
+        && let Some(max) = n.child_layout.max_h.filter(|h| h.is_finite() && *h >= 0.0)
+    {
+        let mut truncated = t.clone();
+        truncated.auto_resize = TextAutoResize::Truncate;
+        return Some(layout_cached(&truncated, width, Some(max)));
+    }
+    Some(layout_cached(t, width, height))
 }
 
 /// The box size a text node should have after its content or style changed, per its resize mode.
@@ -135,11 +149,11 @@ pub fn auto_size(n: &Node) -> Option<(f64, f64)> {
     }
     match t.auto_resize {
         TextAutoResize::WidthAndHeight => {
-            let l = layout_cached(t, None, None);
+            let l = layout_node_at(n, None, None)?;
             Some((l.width.ceil().max(1.0), l.height.max(1.0)))
         }
         TextAutoResize::Height => {
-            let l = layout_cached(t, Some(n.width), None);
+            let l = layout_node_at(n, Some(n.width), None)?;
             Some((n.width, l.height.max(1.0)))
         }
         TextAutoResize::None | TextAutoResize::Truncate => None,
@@ -156,6 +170,8 @@ mod layout_dedupe_tests;
 mod line_separator_tests;
 #[cfg(test)]
 mod list_tests;
+#[cfg(test)]
+mod max_height_tests;
 #[cfg(test)]
 mod metrics_tests;
 #[cfg(test)]

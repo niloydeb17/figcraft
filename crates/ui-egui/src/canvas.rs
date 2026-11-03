@@ -16,6 +16,7 @@ use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
 mod builder;
 mod input;
+mod lift;
 mod outline;
 mod overlays;
 mod render;
@@ -58,6 +59,10 @@ pub struct CanvasState {
     pub tex_coarse: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
+    /// The texture shows the page without layers being dragged ([`lift`]).
+    tex_skipped: bool,
+    /// Layers lifted off the canvas while they're dragged.
+    lift: lift::Lift,
     submitted: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
@@ -103,17 +108,23 @@ pub struct CanvasState {
     pressure: Option<f32>,
     /// The latest scroll came from a mouse wheel rather than a trackpad (Scroll wheel zoom).
     wheel_is_mouse: bool,
+    /// The document as the motion timeline's playhead shows it: the document it came from, the
+    /// page, the moment (bits of the seconds) and the result.
+    pub(crate) motion_doc: Option<(usize, figcraft_doc::NodeId, u64, Arc<figcraft_doc::Document>)>,
 }
 
 impl Default for CanvasState {
     fn default() -> Self {
         Self {
             rect: Rect::NOTHING,
+            motion_doc: None,
             texture: None,
             tex_view: None,
             tex_of: None,
             tex_coarse: false,
             tex_seq: 0,
+            tex_skipped: false,
+            lift: lift::Lift::default(),
             submitted: None,
             want_view: None,
             render_work: None,
@@ -271,11 +282,16 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
-    request_render(app, worker, ppp, max_texture_side, dots);
+    let lifted = lift::update(app);
+    let edit = request_render(app, worker, ppp, max_texture_side, dots, lifted);
+    lift::render(app, &ctx, ppp, max_texture_side);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
+    // An edit whose renders are quick is waited for, so the layers move with their selection
+    // outline and labels instead of trailing a frame behind them.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
-    if let Some(done) = worker.poll()
+    let wait = if edit { edit_wait(app.ui.render_ms) } else { std::time::Duration::ZERO };
+    if let Some(done) = worker.poll_within(wait)
         && shows(&app.canvas, &done, shown)
     {
         if !done.coarse {
@@ -302,6 +318,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_of = Some((done.uid, done.page));
         app.canvas.tex_coarse = done.coarse;
         app.canvas.tex_seq = done.seq;
+        app.canvas.tex_skipped = done.skipped;
     }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, bg);
@@ -314,6 +331,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
         painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    lift::paint(app, &painter, ppp, shown);
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
     crate::frame_labels::rename_field(app, ui);
@@ -364,6 +382,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         // once the frame has asked for it.
         app.canvas.restyle_at = Some(at);
     }
+}
+
+/// The longest the canvas waits for an edit's render, about half a frame at 60 Hz.
+const EDIT_WAIT_MS: f64 = 8.0;
+
+/// How long to wait for an edit's render, given how long the last one took: twice that (renders
+/// vary), when it fits in [`EDIT_WAIT_MS`]; nothing when renders are slower, which a wait wouldn't
+/// catch up with but would hold every frame back by.
+pub(crate) fn edit_wait(last_ms: f64) -> std::time::Duration {
+    if !last_ms.is_finite() || last_ms < 0.0 || last_ms > EDIT_WAIT_MS {
+        return std::time::Duration::ZERO;
+    }
+    std::time::Duration::from_secs_f64((last_ms * 2.0).clamp(1.0, EDIT_WAIT_MS) / 1000.0)
 }
 
 /// The image's screen rect; align native-density renders to device pixels to avoid linear filtering
@@ -432,3 +463,9 @@ mod view_tween_tests;
 
 #[cfg(test)]
 mod zoom_preview_tests;
+
+#[cfg(test)]
+mod edit_wait_tests;
+
+#[cfg(test)]
+mod lift_tests;

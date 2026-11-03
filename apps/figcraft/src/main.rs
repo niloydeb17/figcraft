@@ -27,6 +27,7 @@ mod control_server;
 mod gamepad;
 mod graphics;
 mod recovery;
+mod screenshot;
 mod services;
 mod startup;
 
@@ -66,6 +67,8 @@ struct App {
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
+    /// `--screenshot`: the picture to take before quitting.
+    shot: Option<screenshot::Shot>,
 }
 
 impl eframe::App for App {
@@ -78,6 +81,9 @@ impl eframe::App for App {
             if slot.is_none() {
                 *slot = Some(ctx.clone());
             }
+        }
+        if let Some(shot) = self.shot.as_mut() {
+            shot.tick(ctx, &self.queue);
         }
         let title = with_app(|fig| {
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
@@ -153,7 +159,7 @@ fn main() -> eframe::Result {
     let args = args::parse(&args);
     if let Some(flag) = args.unknown.first() {
         eprintln!(
-            "FigCraft: unknown option {flag}\nUsage: figcraft [--control PORT] [--automation-read-root DIR]... [--automation-write-root DIR]... [FILE | figcraft://join?...]..."
+            "FigCraft: unknown option {flag}\nUsage: figcraft [--control PORT] [--screenshot FILE.png] [--automation-read-root DIR]... [--automation-write-root DIR]... [FILE | figcraft://join?...]..."
         );
         std::process::exit(2);
     }
@@ -191,6 +197,10 @@ fn main() -> eframe::Result {
     session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
     // A file that won't open is said in the window too: it may have been double-clicked.
     let mut failed_open = None;
+    // `--screenshot` with nothing to open shows the motion demo.
+    if args.screenshot.is_some() && args.files.is_empty() {
+        screenshot::demo(&mut session);
+    }
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");
@@ -208,6 +218,8 @@ fn main() -> eframe::Result {
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
     }
+    // A screenshot run keeps nothing: it neither takes back nor writes recovery copies.
+    let recovery_root = recovery_root.filter(|_| args.screenshot.is_none());
     let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
     let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
     // Copies of online files stay until their files arrive from their servers.
@@ -229,12 +241,16 @@ fn main() -> eframe::Result {
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
-    fig.set_startup_update_check(true);
+    fig.set_startup_update_check(args.screenshot.is_none());
     // The UI3 kit's cursors over the canvas, and its eased zooms.
     fig.canvas.figma_cursors = true;
     fig.canvas.smooth_zoom = true;
     fig.automation_roots = roots;
     fig.ui.home = false;
+    // The motion demo shows in Prototype mode, whose timeline it opened.
+    if args.screenshot.is_some() && args.files.is_empty() {
+        fig.ui.right_tab = figcraft_ui_egui::RightTab::Prototype;
+    }
     // Files named on the command line are the user's too: their missing fonts are listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
@@ -248,6 +264,7 @@ fn main() -> eframe::Result {
     if let Some(p) = port {
         control_server::start(p, graphics::port_wait(), queue.clone(), ctx_slot.clone(), fig.session.events.clone());
     }
+    let mut shot = args.screenshot.as_deref().map(screenshot::Shot::new);
     let icon = services::window_icon();
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
     // and StartupWMClass (FreeBSD's package matches the binary's name instead).
@@ -304,6 +321,7 @@ fn main() -> eframe::Result {
                 recovery,
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&cc.egui_ctx),
+                shot: shot.take(),
             }))
         }),
     );

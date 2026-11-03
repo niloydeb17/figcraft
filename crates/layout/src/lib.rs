@@ -348,7 +348,7 @@ fn flow_lines(items: &[Item], wraps: bool, gap: f64, inner_main: f64) -> Vec<Vec
     let mut used = 0.0;
     for (i, item) in items.iter().enumerate() {
         let size = if item.fill_main { item.min_main.unwrap_or(0.0) } else { item.main };
-        let added = if current.is_empty() { size } else { gap.max(0.0) + size };
+        let added = if current.is_empty() { size } else { gap + size };
         if !current.is_empty() && used + added > inner_main + 1e-6 {
             lines.push(std::mem::take(&mut current));
             used = size;
@@ -491,6 +491,24 @@ fn distribute_flow_lines(items: &mut [Item], lines: &[Vec<usize>], inner_main: f
     }
 }
 
+/// A wrapped Hug axis first resolves its unwrapped natural size against its maximum. Wrapping
+/// then uses that space, rather than the old frame size or the longest resulting line.
+fn bounded_hug_main(items: &[Item], al: &AutoLayout, hug: bool, min: Option<f64>, max: Option<f64>, padding: f64) -> Option<f64> {
+    if !al.wrap || !hug || !max.is_some_and(f64::is_finite) {
+        return None;
+    }
+    let natural = items.iter().map(|it| it.main).sum::<f64>() + finite_or_zero(al.gap) * items.len().saturating_sub(1) as f64;
+    Some((clamp_size(natural + padding, min, max) - padding).max(0.0))
+}
+
+fn hug_flow_size(fixed: (f64, f64), hugs: (bool, bool), horizontal: bool, content: (f64, f64), padding: (f64, f64), empty: bool) -> (f64, f64) {
+    if empty {
+        return fixed;
+    }
+    let (w, h) = if horizontal { content } else { (content.1, content.0) };
+    (if hugs.0 { w + padding.0 } else { fixed.0 }, if hugs.1 { h + padding.1 } else { fixed.1 })
+}
+
 /// Lay out one auto layout frame's children and size the frame if it hugs.
 pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let Some(_nested) = Nested::enter() else { return };
@@ -516,7 +534,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         return;
     }
 
-    let inner_main_fixed = if horizontal { fw - pl - pr } else { fh - pt - pb };
+    let mut inner_main_fixed = if horizontal { fw - pl - pr } else { fh - pt - pb };
     let inner_cross_fixed = if horizontal { fh - pt - pb } else { fw - pl - pr };
     let hug_main = if horizontal { hug_w } else { hug_h };
     let hug_cross = if horizontal { hug_h } else { hug_w };
@@ -526,7 +544,12 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
 
     let gap = finite_or_zero(al.gap);
     let auto_gap = al.main_align.is_auto_gap();
-    let wraps = al.wrap && !hug_main;
+    let (main_min, main_max) = if horizontal { (fcl.min_w, fcl.max_w) } else { (fcl.min_h, fcl.max_h) };
+    let bounded = bounded_hug_main(&items, &al, hug_main, main_min, main_max, if horizontal { pl + pr } else { pt + pb });
+    let wraps = al.wrap && (!hug_main || bounded.is_some());
+    if let Some(main) = bounded {
+        inner_main_fixed = main;
+    }
 
     // Fill across a single line: the size is the frame's inner cross size, known up front. Resize
     // those children first, so text that wraps (or a frame hugging it) reports its final main size.
@@ -541,7 +564,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     }
 
     // Split into lines along the main axis (rows of a horizontal layout, columns of a vertical one).
-    let lines = flow_lines(&items, wraps, gap, inner_main_fixed);
+    let lines = flow_lines(&items, wraps, if auto_gap { 0.0 } else { gap }, inner_main_fixed);
 
     // Share each line's free space among its fill children.
     distribute_flow_lines(&mut items, &lines, inner_main_fixed, gap, auto_gap);
@@ -564,26 +587,10 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let mut line_extents = flow_line_extents(&mut items, &lines, gap);
 
     // Container size (on a hugging axis fill children can't fill: they count with their own size).
-    let content_main = line_extents.iter().map(|l| l.0).fold(0.0, f64::max);
+    let content_main = bounded.unwrap_or_else(|| line_extents.iter().map(|l| l.0).fold(0.0, f64::max));
     let cross_gap = finite_or_zero(al.cross_gap);
     let content_cross: f64 = line_extents.iter().map(|l| l.1).sum::<f64>() + cross_gap * lines.len().saturating_sub(1) as f64;
-    let (mut nw, mut nh) = (fw, fh);
-    if hug_main {
-        let v = content_main + if horizontal { pl + pr } else { pt + pb };
-        if horizontal {
-            nw = v;
-        } else {
-            nh = v;
-        }
-    }
-    if hug_cross {
-        let v = content_cross + if horizontal { pt + pb } else { pl + pr };
-        if horizontal {
-            nh = v;
-        } else {
-            nw = v;
-        }
-    }
+    let (nw, nh) = hug_flow_size((fw, fh), (hug_w, hug_h), horizontal, (content_main, content_cross), (pl + pr, pt + pb), kids.is_empty());
     let (nw, nh) = (clamp_size(nw, fcl.min_w, fcl.max_w).max(pl + pr), clamp_size(nh, fcl.min_h, fcl.max_h).max(pt + pb));
     set_size(doc, frame, nw, nh);
     apply_constraints(doc, frame, ow, oh);
@@ -654,6 +661,7 @@ fn resize_child(doc: &mut Document, id: NodeId, w: f64, h: f64, m: &dyn Measure)
             t.auto_resize = TextAutoResize::Height;
         }
         let th = m.text_height(doc, id, w).unwrap_or(h);
+        let th = doc.node(id).map_or(th, |n| clamp_size(th, n.child_layout.min_h, n.child_layout.max_h));
         set_size(doc, id, w, th);
     } else {
         let old = doc.node(id).map(|n| (n.width, n.height));
@@ -1185,6 +1193,8 @@ mod depth_tests;
 mod grid_place_tests;
 #[cfg(test)]
 mod nested_tests;
+#[cfg(test)]
+mod observed_figma_tests;
 mod occupancy;
 #[cfg(test)]
 mod tests;

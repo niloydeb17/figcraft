@@ -48,6 +48,7 @@ struct Frame {
     magnified_image_pixels: bool,
     skip: Vec<NodeId>,
     solo: Option<NodeId>,
+    lifted: Vec<NodeId>,
     background: Option<figcraft_color::Color>,
     dots: Option<crate::Dots>,
     scale: u64,
@@ -285,6 +286,7 @@ impl Retained {
             && last.magnified_image_pixels == opts.magnified_image_pixels
             && last.skip == opts.skip
             && last.solo == opts.solo
+            && last.lifted == opts.lifted
             && last.background == opts.background
             && last.dots == opts.dots
             && last.scale == snapped.scale.to_bits()
@@ -328,6 +330,7 @@ impl Retained {
             magnified_image_pixels: opts.magnified_image_pixels,
             skip: opts.skip.clone(),
             solo: opts.solo,
+            lifted: opts.lifted.clone(),
             background: opts.background,
             dots: opts.dots,
             scale: view.scale.to_bits(),

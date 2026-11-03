@@ -123,7 +123,6 @@ fn restore_unsaved(session: &mut Session) -> usize {
     crate::recovery::restore(session, kept)
 }
 
-/// Say on the page that it stopped (the canvas stays as it was).
 /// The browser tab's title: the open file's name (and a dot while it has unsaved changes), as Figma's
 /// tab names its file; plain FigCraft on the Home screen. The page has no tab strip of its own.
 fn set_page_title(fig: &FigApp) {
@@ -142,6 +141,7 @@ fn set_page_title(fig: &FigApp) {
     });
 }
 
+/// Say on the page that it stopped (the canvas stays as it was).
 fn show_stopped(text: &str) {
     let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
     let (Ok(el), Some(body)) = (document.create_element("div"), document.body()) else { return };

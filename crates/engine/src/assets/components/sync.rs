@@ -373,6 +373,11 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
         follow_variant_resizing(&mut fresh.child_layout, &prev.child_layout, &comp.child_layout);
     }
     carry_overrides(root, &mut fresh, Carry::Root);
+    // A Hug root can become empty after a property or visibility change. Its last size belongs
+    // to this instance, just as the derived sizes of rebuilt layers below it do.
+    if root.source == Some(component) {
+        keep_laid_out(doc, comp, root, &mut fresh);
+    }
     fresh
 }
 

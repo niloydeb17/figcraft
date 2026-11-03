@@ -114,6 +114,8 @@ pub struct DocState {
     /// The file on disk as this tab last read or wrote it: a save refuses to replace what another
     /// app (figcraft-cli, say) wrote to it since (#1330).
     pub(crate) on_disk: Option<library::Stamp>,
+    /// The motion timeline: open or not, the playhead, playing (not saved).
+    pub motion: cmd::motion::MotionPlayer,
 }
 
 /// A version shown on the canvas in place of the document: read-only until it's restored or the
@@ -178,6 +180,7 @@ impl DocState {
             last_duplicate: None,
             images_left_in_file: None,
             on_disk: None,
+            motion: Default::default(),
         };
         st.zoom_to_fit();
         st
