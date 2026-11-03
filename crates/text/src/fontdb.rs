@@ -1165,12 +1165,16 @@ impl FontDb {
         self.generation += 1;
         let mut out = Rescan::default();
         for (k, (display, entries)) in found {
-            if self.families.contains_key(&k) {
+            if let Some((_, idx)) = self.families.get(&k) {
                 let waiting = self.pending.get(&k).map(|(_, v)| v.clone()).unwrap_or_default();
+                // As the first scan: the styles the family already has (embedded ones) win.
+                let have: Vec<&Arc<Face>> = idx.iter().filter_map(|i| self.faces.get(*i)).collect();
                 let new: Vec<Pending> = entries
                     .into_iter()
                     .filter(|e| {
-                        !self.loaded_files.contains(&(e.path.clone(), e.index)) && !waiting.iter().any(|w| w.path == e.path && w.index == e.index)
+                        !self.loaded_files.contains(&(e.path.clone(), e.index))
+                            && !waiting.iter().any(|w| w.path == e.path && w.index == e.index)
+                            && !have.iter().any(|f| norm_style(&f.style) == norm_style(&e.style) || f.instance(&e.style).is_some())
                     })
                     .collect();
                 if !new.is_empty() {

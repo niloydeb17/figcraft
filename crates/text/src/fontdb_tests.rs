@@ -358,6 +358,11 @@ fn the_scan_offers_installed_styles_an_embedded_family_lacks() {
     let waiting: Vec<String> = db.pending.get("brand sans").map(|(_, v)| v.iter().map(|e| e.style.clone()).collect()).unwrap_or_default();
     assert_eq!(waiting, ["SemiBold", "Medium"]);
     assert_eq!(db.families(), ["Brand Sans"]);
+    // A rescan keeps to the same rule: the embedded style isn't offered from disk (text measured
+    // before and after a rescan would differ).
+    assert_eq!(db.merge_rescan(found("Brand Sans", &["Regular", "SemiBold"])), Rescan::default());
+    let waiting: Vec<String> = db.pending.get("brand sans").map(|(_, v)| v.iter().map(|e| e.style.clone()).collect()).unwrap_or_default();
+    assert_eq!(waiting, ["SemiBold", "Medium"]);
     db.merge_scan(found("CJK UI", &["Regular", "Bold"]));
     assert_eq!(left(&db), ["Regular", "Bold"]);
 }
