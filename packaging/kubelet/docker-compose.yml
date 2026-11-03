@@ -16,12 +16,15 @@ services:
     depends_on:
       data-init:
         condition: service_completed_successfully
+    # server.toml is built into the image rather than mounted, so a push that changes it gives a new
+    # image and the deploy restarts the server with the new settings.
     build:
       context: ../..
       dockerfile: packaging/server/Dockerfile
+      args:
+        SERVER_CONFIG: packaging/kubelet/server.toml
     volumes:
       - figcraft-data:/data
-      - ./server.toml:/etc/figcraft-server/server.toml:ro
 
   web:
     restart: unless-stopped
