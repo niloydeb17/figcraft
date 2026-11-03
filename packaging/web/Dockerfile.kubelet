@@ -48,12 +48,17 @@ server {
     proxy_set_header Upgrade "";
     proxy_set_header Connection "";
   }
-  # Everyone else sees the homepage (any other path: its page; the fallback finds the file on the
-  # second pass, so it never loops).
+  # Everyone else sees the homepage (any other path: its page, served here rather than redirected,
+  # which would ask for a session again).
   location @site {
     root /usr/share/nginx/site;
     add_header Cache-Control "no-cache";
-    try_files $uri $uri/index.html /index.html;
+    try_files $uri $uri/index.html @site_page;
+  }
+  location @site_page {
+    root /usr/share/nginx/site;
+    add_header Cache-Control "no-cache";
+    rewrite ^ /index.html break;
   }
   # Accounts: the server's sign-in pages and API.
   location = /login { proxy_pass http://server:47901; }
