@@ -71,6 +71,9 @@ pub fn start() {
                         let link = js_sys::decode_uri_component(link).ok().and_then(|s| s.as_string()).unwrap_or_else(|| link.to_string());
                         figcraft_ui_egui::live::open_invite(&mut fig, &link);
                     }
+                    // `#file=<code or link>`: this page's own address for a file on its server (see crate::cloud).
+                    let mut cloud = crate::cloud::Cloud::default();
+                    cloud.open_from_address(&mut fig, &hash);
                     // `?control`: `window.figcraft`, the page's control channel (crate::api), opt-in.
                     if crate::query::control(&query()) {
                         crate::api::connect(cc.egui_ctx.clone());
@@ -78,7 +81,7 @@ pub fn start() {
                             log::error!("couldn't install window.figcraft: {e:?}");
                         }
                     }
-                    Ok(Box::new(WebShell { fig }))
+                    Ok(Box::new(WebShell { fig, cloud }))
                 }),
             )
             .await;
@@ -161,6 +164,8 @@ fn query() -> String {
 
 struct WebShell {
     fig: FigApp,
+    /// Files kept on the page's server and the address that names the open one.
+    cloud: crate::cloud::Cloud,
 }
 
 impl eframe::App for WebShell {
@@ -188,6 +193,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
+        self.cloud.tick(&mut self.fig);
         set_page_title(&self.fig);
         crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,

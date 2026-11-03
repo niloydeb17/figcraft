@@ -30,6 +30,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod api;
+#[cfg(target_arch = "wasm32")]
+mod cloud;
 #[cfg(any(target_arch = "wasm32", test))]
 mod kept;
 #[cfg(target_arch = "wasm32")]
