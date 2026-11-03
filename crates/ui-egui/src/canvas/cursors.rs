@@ -126,6 +126,128 @@ impl Shown {
     }
 }
 
+/// The UI3 kit's cursors (private use), shown instead when [`crate::canvas::CanvasState`]'s
+/// `figma_cursors` is on.
+#[rustfmt::skip]
+#[allow(clippy::approx_constant, clippy::excessive_precision, clippy::unreadable_literal)]
+mod figma;
+
+use figma::FigCursor;
+
+/// The kit's cursor for a system cursor, and how far to turn it (degrees, clockwise).
+pub(crate) fn kit_icon(icon: CursorIcon) -> Option<(&'static FigCursor, f32)> {
+    use CursorIcon as C;
+    Some(match icon {
+        C::Default => (&figma::BLACK, 0.0),
+        C::Crosshair | C::Cell => (&figma::CROSSHAIR, 0.0),
+        C::Move | C::AllScroll => (&figma::MOVE, 0.0),
+        C::ResizeHorizontal | C::ResizeEast | C::ResizeWest | C::ResizeColumn => (&figma::RESIZE, 0.0),
+        C::ResizeVertical | C::ResizeNorth | C::ResizeSouth | C::ResizeRow => (&figma::RESIZE, 90.0),
+        C::ResizeNwSe | C::ResizeNorthWest | C::ResizeSouthEast => (&figma::RESIZE, 45.0),
+        C::ResizeNeSw | C::ResizeNorthEast | C::ResizeSouthWest => (&figma::RESIZE, 135.0),
+        C::Grab => (&figma::HAND_NEW, 0.0),
+        C::Grabbing => (&figma::HAND_PRESS, 0.0),
+        C::Text | C::VerticalText => (&figma::TEXT, 0.0),
+        C::Copy | C::Alias => (&figma::DUPLICATE, 0.0),
+        C::PointingHand => (&figma::CLICK, 0.0),
+        C::NotAllowed | C::NoDrop => (&figma::NOT_ALLOWED, 0.0),
+        C::ZoomIn => (&figma::ZOOM_IN, 0.0),
+        C::ZoomOut => (&figma::ZOOM_OUT, 0.0),
+        _ => return None,
+    })
+}
+
+/// The kit's cursor for what shows; `cursor` is the engine's, for a resize's exact angle.
+pub(crate) fn kit(shown: Shown, cursor: Option<Cursor>) -> Option<(&'static FigCursor, f32)> {
+    match (shown, cursor) {
+        (Shown::System(_), Some(Cursor::Resize(a))) if a.is_finite() => Some((&figma::RESIZE, a.rem_euclid(180.0) as f32)),
+        (Shown::System(i), _) => kit_icon(i),
+        // The kit's rotate arrows sit round a top right corner (-45°).
+        (Shown::Drawn(Glyph::Rotate(a)), _) => Some((&figma::ROTATE, a + 45.0)),
+        (Shown::Drawn(Glyph::Pen(p)), _) => Some((
+            match p {
+                PenCursor::New => &figma::PEN,
+                PenCursor::Close => &figma::PEN_SNAP,
+                PenCursor::Add => &figma::PEN_INSERT,
+                PenCursor::Bend => &figma::BEND,
+            },
+            0.0,
+        )),
+        (Shown::Drawn(Glyph::Eyedropper), _) => Some((&figma::DROPPER, 0.0)),
+        (Shown::Drawn(Glyph::Comment), _) => Some((&figma::COMMENTS_NEXT_PIN, 0.0)),
+    }
+}
+
+/// Show the kit's cursor for `shown` at `at` (the system's hidden), or `shown` itself where the kit
+/// has none.
+pub fn show_kit(ctx: &egui::Context, at: Pos2, shown: Shown, cursor: Option<Cursor>) {
+    match kit(shown, cursor) {
+        Some((c, turn)) => {
+            ctx.set_cursor_icon(CursorIcon::None);
+            paint_kit(&layer(ctx), at, c, turn);
+        }
+        None => shown.show(ctx, at),
+    }
+}
+
+/// Over the canvas, the cursor something asked for this frame (a ruler guide's arrows, a gradient
+/// stop's hand) as the kit draws it.
+pub fn restyle(ctx: &egui::Context, at: Pos2) {
+    let icon = ctx.output(|o| o.cursor_icon);
+    if let Some((c, turn)) = kit_icon(icon) {
+        ctx.set_cursor_icon(CursorIcon::None);
+        paint_kit(&layer(ctx), at, c, turn);
+    }
+}
+
+fn layer(ctx: &egui::Context) -> Painter {
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas_cursor")))
+}
+
+/// Draw `c` with its hot spot at `at`, turned `turn` degrees about it: the shadow casters' soft
+/// shadow (nine faint copies round a point 1 below), then the shapes.
+fn paint_kit(painter: &Painter, at: Pos2, c: &FigCursor, turn: f32) {
+    let (sin, cos) = if turn.is_finite() { turn.to_radians().sin_cos() } else { (0.0, 1.0) };
+    let hot = vec2(c.hot[0], c.hot[1]);
+    let place = |x: f32, y: f32| {
+        let d = vec2(x, y) - hot;
+        at + vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos)
+    };
+    let px = 1.0 / painter.ctx().pixels_per_point();
+    let shadow = Color32::from_black_alpha(14);
+    let blur = [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.7, 0.7), (-0.7, 0.7), (0.7, -0.7), (-0.7, -0.7)];
+    for l in c.layers.iter().filter(|l| l.shadow) {
+        for (dx, dy) in blur {
+            mesh(painter, l, shadow, |x, y| place(x, y) + vec2(dx, 1.0 + dy), None);
+        }
+    }
+    for l in c.layers {
+        let color = Color32::from_rgb(l.rgb[0], l.rgb[1], l.rgb[2]);
+        mesh(painter, l, color, place, Some(Stroke::new(px * 0.5, color)));
+    }
+}
+
+/// One shape, its points through `place`, with a hairline round its rings to soften the edges.
+fn mesh(painter: &Painter, l: &figma::Layer, color: Color32, place: impl Fn(f32, f32) -> Pos2, edge: Option<Stroke>) {
+    let at = |i: usize| place(l.verts.get(i * 2).copied().unwrap_or(0.0), l.verts.get(i * 2 + 1).copied().unwrap_or(0.0));
+    let n = l.verts.len() / 2;
+    let mut m = egui::Mesh::default();
+    for i in 0..n {
+        m.colored_vertex(at(i), color);
+    }
+    m.indices = l.tris.iter().map(|&t| u32::from(t)).filter(|&t| (t as usize) < n).collect();
+    m.indices.truncate(m.indices.len() / 3 * 3);
+    painter.add(Shape::mesh(m));
+    if let Some(stroke) = edge {
+        let mut start = 0usize;
+        for &k in l.rings {
+            let k = usize::from(k);
+            painter.add(Shape::closed_line((start..(start + k).min(n)).map(&at).collect(), stroke));
+            start += k;
+        }
+    }
+}
+
 /// Dark lines over a light edge: readable on any page and artwork.
 const INK: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
 const EDGE: Color32 = Color32::WHITE;

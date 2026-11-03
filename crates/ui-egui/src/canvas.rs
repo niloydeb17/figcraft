@@ -81,6 +81,12 @@ pub struct CanvasState {
     /// What the pointer shows over the canvas (`ui.inspect`); none while it is elsewhere or
     /// something on the canvas with a cursor of its own has it (a ruler guide, a gradient handle).
     pub cursor: Option<crate::cursors::Shown>,
+    /// Draw the UI3 kit's cursors over the canvas instead of the system's (the desktop and web
+    /// apps turn it on; headless harnesses keep the system cursors they check).
+    pub figma_cursors: bool,
+    /// Where the pointer is over the canvas while something on it has a cursor of its own: the
+    /// frame's cursor is drawn as the kit's there once the frame ends.
+    pub(crate) restyle_at: Option<Pos2>,
     preedit: Option<PreeditView>,
     /// The pen pressure last reported during the current press (pen and stylus touches; the
     /// winit backends and browsers that report it).
@@ -107,6 +113,8 @@ impl Default for CanvasState {
             space_pan: false,
             middle_pan: None,
             cursor: None,
+            figma_cursors: false,
+            restyle_at: None,
             zoom_tool: None,
             zoom_drag: None,
             last_pointer: None,
@@ -320,11 +328,22 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     crate::dev_mode::focus_bar(app, &ctx, rect);
     // The cursor: the tool's, unless something on the canvas with its own has the pointer.
     app.canvas.cursor = None;
+    app.canvas.restyle_at = None;
     if let (true, Some(at)) = (own_cursor && resp.hovered(), ctx.input(|i| i.pointer.hover_pos())) {
         let panning = app.canvas.space_pan || app.canvas.middle_pan.is_some();
-        let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, app.session.tool.overlay.cursor);
-        shown.show(&ctx, at);
+        let cursor = app.session.tool.overlay.cursor;
+        let shown = crate::cursors::on_canvas(panning, ctx.input(|i| i.pointer.any_down()), app.canvas.zoom_tool, cursor);
+        if app.canvas.figma_cursors {
+            let engine = (!panning && app.canvas.zoom_tool.is_none()).then_some(cursor);
+            crate::cursors::show_kit(&ctx, at, shown, engine);
+        } else {
+            shown.show(&ctx, at);
+        }
         app.canvas.cursor = Some(shown);
+    } else if let (true, true, Some(at)) = (app.canvas.figma_cursors, resp.hovered(), ctx.input(|i| i.pointer.hover_pos())) {
+        // Something on the canvas with a cursor of its own has the pointer: drawn as the kit's
+        // once the frame has asked for it.
+        app.canvas.restyle_at = Some(at);
     }
 }
 

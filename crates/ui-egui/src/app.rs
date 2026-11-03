@@ -191,6 +191,9 @@ impl FigApp {
             windows::repaint_others(self, &ctx);
         }
         windows::show(self, &ctx);
+        if let Some(at) = self.canvas.restyle_at.take() {
+            crate::cursors::restyle(&ctx, at);
+        }
         // The injected batch was applied by the frame that took it. A discarded sizing pass keeps
         // its acknowledgement for the presented pass but never replays the input (its side effects
         // already happened and would otherwise duplicate).

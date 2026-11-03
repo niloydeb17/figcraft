@@ -199,3 +199,49 @@ fn a_layers_row_that_takes_no_drop_shows_not_allowed() {
     u.frame(vec![Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
     u.button(o, false);
 }
+
+#[test]
+fn every_cursor_has_the_kits_art_turned_to_its_angle() {
+    use crate::cursors::{kit, kit_icon};
+    use Shown::System;
+    let turn = |shown: Shown, cursor: Option<Cursor>| kit(shown, cursor).map(|(_, t)| t);
+    for t in ToolId::ALL {
+        assert!(kit(of(t.cursor()), Some(t.cursor())).is_some(), "{t:?}");
+    }
+    for c in [Cursor::Move, Cursor::Grabbing, Cursor::Copy, Cursor::Pointer, Cursor::NotAllowed, Cursor::Pen(PenCursor::Bend)] {
+        assert!(kit(of(c), Some(c)).is_some(), "{c:?}");
+    }
+    for i in [CursorIcon::ZoomIn, CursorIcon::ZoomOut, CursorIcon::ResizeNeSw, CursorIcon::Text] {
+        assert!(kit_icon(i).is_some(), "{i:?}");
+    }
+    // A resize follows its exact angle (a turned frame's edges), not the system's eighths.
+    assert_eq!(turn(of(Cursor::Resize(30.0)), Some(Cursor::Resize(30.0))), Some(30.0));
+    assert_eq!(turn(of(Cursor::Resize(-30.0)), Some(Cursor::Resize(-30.0))), Some(150.0));
+    assert_eq!(turn(System(CursorIcon::ResizeVertical), None), Some(90.0));
+    // The kit's rotate arrows sit round a top right corner.
+    assert_eq!(turn(of(Cursor::Rotate(-45.0)), None), Some(360.0));
+    assert_eq!(turn(of(Cursor::Rotate(45.0)), None), Some(90.0));
+    // Junk angles fall back to the system's arrows.
+    assert_eq!(turn(of(Cursor::Resize(f64::NAN)), Some(Cursor::Resize(f64::NAN))), Some(0.0));
+}
+
+#[test]
+fn with_the_kits_cursors_the_canvas_draws_its_own_over_a_hidden_system_cursor() {
+    let mut s = Session::new();
+    s.execute("view.rulers", &json!({"on": true})).unwrap();
+    s.execute("guide.add", &json!({"vertical": true, "offset": 40})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.canvas.figma_cursors = true;
+    let c = u.app.canvas.rect.center();
+    let on_guide = pos2(u.app.to_screen(40.0, 0.0).x, c.y);
+    let away = pos2(on_guide.x + 120.0, c.y);
+    u.frame(vec![Event::PointerMoved(away)]);
+    let out = u.frame_output(vec![Event::PointerMoved(away)]);
+    assert_eq!(out.platform_output.cursor_icon, CursorIcon::None, "the kit's arrow is drawn instead");
+    assert_eq!(u.app.canvas.cursor.map(Shown::name).as_deref(), Some("default"), "named as before");
+    // A ruler guide's own arrows are drawn as the kit's too.
+    u.frame(vec![Event::PointerMoved(on_guide)]);
+    let out = u.frame_output(vec![Event::PointerMoved(on_guide)]);
+    assert_eq!(out.platform_output.cursor_icon, CursorIcon::None);
+    assert!(u.app.canvas.cursor.is_none());
+}
