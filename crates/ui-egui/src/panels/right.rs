@@ -166,10 +166,14 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let (tabs, _) = ui.allocate_exact_size(vec2(w, 33.0), Sense::hover());
     let tab_y = tabs.min.y + 12.0;
     let mut x = tabs.min.x + 8.0;
-    // Dev Mode has Inspect and Plugins; the other modes Design and Prototype.
+    // Dev Mode has Inspect and Plugins; Draw mode only names itself; the other modes Design and
+    // Prototype.
     let dev = app.ui.right_tab == RightTab::Inspect;
+    let draw = app.ui.draw_mode && app.ui.right_tab == RightTab::Design;
     let tab_list: Vec<(&str, bool, Option<RightTab>)> = if dev {
         vec![(tr("Inspect"), !app.ui.dev.plugins_tab, None), (tr("Plugins"), app.ui.dev.plugins_tab, None)]
+    } else if draw {
+        vec![(tr("Draw"), true, Some(RightTab::Design))]
     } else {
         vec![
             (tr("Design"), app.ui.right_tab == RightTab::Design, Some(RightTab::Design)),
@@ -181,7 +185,7 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
         let r = Rect::from_min_size(pos2(x, tab_y - 12.0), vec2(galley.size().x + 15.0, 24.0));
         let resp = ui.interact(r, ui.scope_id().with(("rtab", label)), Sense::click());
         a11y::tab(&resp, label, active);
-        if active {
+        if active && !draw {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
         ui.painter().galley(pos2(r.min.x + 8.0, r.center().y - galley.size().y / 2.0), galley, if active { t.text } else { t.text_secondary });

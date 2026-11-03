@@ -1114,6 +1114,16 @@ fn ui_set_view(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String>
             "inspect" => crate::RightTab::Inspect,
             _ => crate::RightTab::Design,
         };
+        // Another panel leaves Draw mode, as the switcher does.
+        if app.ui.right_tab != crate::RightTab::Design {
+            app.ui.draw_mode = false;
+        }
+    }
+    if let Some(d) = p.get("drawMode").and_then(Value::as_bool) {
+        app.ui.draw_mode = d;
+        if d {
+            app.ui.right_tab = crate::RightTab::Design;
+        }
     }
     if let Some(t) = p.get("leftTab").and_then(Value::as_str) {
         app.ui.left_tab = if t == "assets" { crate::LeftTab::Assets } else { crate::LeftTab::File };

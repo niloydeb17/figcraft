@@ -65,6 +65,14 @@ const MODE_INSET: f32 = 2.0;
 /// The mode switcher's width: four segments, three gaps and an inset at each end.
 const MODE_W: f32 = 4.0 * MODE_CELL + 3.0 * MODE_INSET + 2.0 * MODE_INSET;
 
+/// Draw mode's illustrated tools: each stands in a cell this wide, its top this far below the
+/// pill's (the rest hidden below the pill), and rises this far on hover and further when chosen
+/// (UI3's Draw toolbar).
+const DRAW_CELL: f32 = 48.0;
+const DRAW_REST: f32 = 8.0;
+const DRAW_HOVER_RISE: f32 = 8.0;
+const DRAW_CHOSEN_RISE: f32 = 14.0;
+
 /// `GLYPH`'s box centred in `r`.
 fn glyph_rect(r: Rect) -> Rect {
     Rect::from_center_size(r.center(), vec2(GLYPH, GLYPH))
@@ -134,6 +142,87 @@ const GROUPS: &[Group] = &[
     Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
 ];
 
+/// Draw mode's tool groups around its illustrated tools: Move, then Frame, the shapes (the
+/// ellipse first), Text and Comment.
+const DRAW_GROUPS: &[Group] = &[
+    Group::tools("move", tr_noop("Move tools"), &[(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand), (ToolId::Scale, Icon::Scale)]),
+    Group::tools("frame", tr_noop("Frame tools"), &[(ToolId::Frame, Icon::Frame), (ToolId::Section, Icon::Section), (ToolId::Slice, Icon::Slice)]),
+    Group::tools(
+        "dshape",
+        tr_noop("Shape tools"),
+        &[
+            (ToolId::Ellipse, Icon::Ellipse),
+            (ToolId::Rectangle, Icon::Rectangle),
+            (ToolId::Line, Icon::Line),
+            (ToolId::Arrow, Icon::Arrow),
+            (ToolId::Polygon, Icon::Polygon),
+            (ToolId::Star, Icon::Star),
+        ],
+    )
+    .with(&[Extra { label: tr_noop("Image/video…"), icon: Icon::Image, cmd: "file.placeImage" }]),
+    Group::tools("text", tr_noop("Text"), &[(ToolId::Text, Icon::Text), (ToolId::TextOnPath, Icon::TextOnPath)]),
+    Group::tools("comment", tr_noop("Comment"), &[(ToolId::Comment, Icon::Comment)]),
+];
+
+/// Draw mode's illustrated tools.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DrawTool {
+    Pen,
+    /// The Pencil with a bristle brush.
+    Brush,
+    /// The Pencil with a plain stroke.
+    Pencil,
+}
+
+/// Each illustrated tool: what it is, its name, its picture (the UI3 kit's, 4× its size, private
+/// use) and its size in points.
+const DRAW_TOOLS: [(DrawTool, &str, &[u8], [f32; 2]); 3] = [
+    (DrawTool::Pen, tr_noop("Pen"), include_bytes!("../../../assets/figma-ui3/draw-pen.png"), [34.0, 68.0]),
+    (DrawTool::Brush, tr_noop("Brush"), include_bytes!("../../../assets/figma-ui3/draw-brush.png"), [36.0, 67.0]),
+    (DrawTool::Pencil, tr_noop("Pencil"), include_bytes!("../../../assets/figma-ui3/draw-pencil.png"), [34.0, 67.0]),
+];
+
+/// The illustrated tool chosen now, if one is.
+fn drawn(app: &FigApp) -> Option<DrawTool> {
+    match app.session.tool.tool {
+        ToolId::Pen => Some(DrawTool::Pen),
+        ToolId::Pencil if app.session.tool.pencil_brush.is_some() => Some(DrawTool::Brush),
+        ToolId::Pencil => Some(DrawTool::Pencil),
+        _ => None,
+    }
+}
+
+/// Choose illustrated tool `tool`: the Pen, or the Pencil with a bristle brush or a plain stroke.
+fn pick_draw_tool(app: &mut FigApp, tool: DrawTool) {
+    match tool {
+        DrawTool::Pen => choose(app, ToolId::Pen),
+        DrawTool::Brush => {
+            app.run("tool.pencilBrush", json!({"preset": "bristle"}));
+            choose(app, ToolId::Pencil);
+        }
+        DrawTool::Pencil => {
+            app.run("tool.pencilBrush", json!({"preset": null}));
+            choose(app, ToolId::Pencil);
+        }
+    }
+}
+
+/// Illustrated tool `i`'s picture as a texture, decoded once.
+fn draw_texture(ctx: &egui::Context, i: usize) -> Option<egui::TextureHandle> {
+    let id = egui::Id::unique(("draw_tool_texture", i));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(t);
+    }
+    let (_, _, bytes, _) = DRAW_TOOLS.get(i)?;
+    let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let image = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+    // Drawn at a quarter of its size or less: mipmaps keep it smooth.
+    let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+    let texture = ctx.load_texture(format!("figcraft-draw-tool-{i}"), image, options);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    Some(texture)
+}
+
 /// A board's toolbar: moving around, ink, stickies, shapes, connectors, text, sections, stamps.
 const BOARD_GROUPS: &[Group] = &[
     Group::tools("bmove", tr_noop("Move tools"), &[(ToolId::Move, Icon::Move), (ToolId::Hand, Icon::Hand)]),
@@ -187,7 +276,22 @@ pub(crate) fn bar_width(app: &FigApp) -> f32 {
     if !board && app.ui.right_tab == crate::RightTab::Inspect {
         return dev_width();
     }
+    if !board && draw_mode(app) {
+        return draw_width();
+    }
     main_width(if board { BOARD_GROUPS } else { GROUPS }, board)
+}
+
+/// Draw mode shows its toolbar: chosen, on the Design panel.
+fn draw_mode(app: &FigApp) -> bool {
+    app.ui.draw_mode && app.ui.right_tab == crate::RightTab::Design
+}
+
+/// The Draw pill's width: Move, the illustrated tools between dividers, Frame, the shapes, Text,
+/// Comment, Actions, the divider and the mode switcher (625 pt, as in the kit).
+fn draw_width() -> f32 {
+    let group = TOOL_CELL + FLYOUT_GAP + FLYOUT_W + GAP;
+    PAD + group + 2.0 * (DIVIDER + GAP) + 3.0 * DRAW_CELL + GAP + 3.0 * group + (TOOL_CELL + GAP) + TOOL_CELL + GAP + DIVIDER + GAP + MODE_W + PAD
 }
 
 /// The Dev Mode pill's width: its five tools, the divider and the mode switcher.
@@ -240,7 +344,8 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         app.ui.dev.measure_on = false;
     }
     let (slide, grow) = if board { (0.0, 0.0) } else { mode_anim(app, ui.ctx(), dev) };
-    let design_w = main_width(groups, board);
+    let draw = !board && draw_mode(app);
+    let design_w = if draw { draw_width() } else { main_width(groups, board) };
     let width = design_w + (dev_width() - design_w) * grow;
     ui.data_mut(|d| d.insert_temp(anim_id(), (slide, grow, width)));
     let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
@@ -254,8 +359,12 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     // The design row slides down out of the pill as the Dev Mode row comes in from above.
     if slide < 1.0 {
         let row_y = cy + slide * PILL_H;
-        for g in groups {
-            x = group_cell(app, ui, g, pos2(x, row_y), rect.min.y, t);
+        if draw {
+            x = draw_row(app, ui, x, row_y, rect, outer_clip, t);
+        } else {
+            for g in groups {
+                x = group_cell(app, ui, g, pos2(x, row_y), rect.min.y, t);
+            }
         }
         x = actions_button(app, ui, x, row_y, t);
     }
@@ -283,6 +392,65 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     }
     ui.set_clip_rect(outer_clip);
     help_button(app, ui, canvas, rect, t);
+}
+
+/// The Draw row from `x` (its left edge; `cy`, the row's middle) in `pill`: Move, the
+/// illustrated pen, brush and pencil between dividers, then Frame, the shapes, Text and Comment.
+/// The tools stand up out of the pill's bottom edge and may rise above its top (inside
+/// `outer_clip`). Where Actions starts.
+fn draw_row(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, pill: Rect, outer_clip: Rect, t: &Tokens) -> f32 {
+    let (first, rest) = DRAW_GROUPS.split_first().map_or((None, DRAW_GROUPS), |(f, r)| (Some(f), r));
+    let mut x = x;
+    if let Some(g) = first {
+        x = group_cell(app, ui, g, pos2(x, cy), pill.min.y, t);
+    }
+    divider(ui, t, x, cy);
+    x += DIVIDER + GAP;
+    let shift = cy - pill.center().y;
+    let clip = Rect::from_min_max(pos2(x, pill.min.y - DRAW_CHOSEN_RISE), pos2(x + 3.0 * DRAW_CELL, pill.max.y)).translate(vec2(0.0, shift));
+    let painter = ui.painter().with_clip_rect(clip.intersect(outer_clip));
+    let chosen = drawn(app);
+    let time = if app.reduce_motion() { 0.0 } else { 0.15 };
+    for (i, (tool, name, _, [w, h])) in DRAW_TOOLS.iter().enumerate() {
+        let cell = Rect::from_min_max(pos2(x, pill.min.y), pos2(x + DRAW_CELL, pill.max.y)).translate(vec2(0.0, shift));
+        let tip = match tool {
+            DrawTool::Pen => format!("{}  {}", tr(name), pretty_shortcut(ToolId::Pen.shortcut())),
+            DrawTool::Pencil => format!("{}  {}", tr(name), pretty_shortcut(ToolId::Pencil.shortcut())),
+            DrawTool::Brush => tr(name).to_string(),
+        };
+        let resp = ui.interact(cell, ui.scope_id().with(("draw_tool", i)), Sense::click()).on_hover_text(&tip);
+        let on = chosen == Some(*tool);
+        a11y::toggle(&resp, &tip, on);
+        if on {
+            a11y::prefer(&mut app.ui.nav, Region::Toolbar, resp.id);
+            // The chosen tool stands on a light cell open at the bottom.
+            let under = Rect::from_min_max(pos2(cell.min.x, cell.min.y + 6.0), pos2(cell.max.x, cell.max.y + 8.0));
+            painter.rect_filled(under, CornerRadius::same(5), t.hover);
+        }
+        let target = if on {
+            DRAW_CHOSEN_RISE
+        } else if resp.hovered() {
+            DRAW_HOVER_RISE
+        } else {
+            0.0
+        };
+        let rise = ui.ctx().animate_value_with_time(resp.id.with("rise"), target, time);
+        if let Some(texture) = draw_texture(ui.ctx(), i) {
+            let r = Rect::from_min_size(pos2(cell.center().x - w / 2.0, cell.min.y + DRAW_REST - rise), vec2(*w, *h));
+            painter.image(texture.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        if resp.clicked() {
+            pick_draw_tool(app, *tool);
+        }
+        x += DRAW_CELL;
+    }
+    x += GAP;
+    divider(ui, t, x, cy);
+    x += DIVIDER + GAP;
+    for g in rest {
+        x = group_cell(app, ui, g, pos2(x, cy), pill.min.y, t);
+    }
+    x
 }
 
 /// The Dev Mode row from `x` (its left edge, the row's middle): Move, Copy colors, Measurement,
@@ -444,7 +612,7 @@ fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) ->
 fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
     let modes = [(Icon::ModeDraw, tr("Draw")), (Icon::ModeDesign, tr("Design")), (Icon::ModePrototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
     let active = match app.ui.right_tab {
-        crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
+        crate::RightTab::Design if app.ui.draw_mode => 0,
         crate::RightTab::Design => 1,
         crate::RightTab::Prototype => 2,
         crate::RightTab::Inspect => 3,
@@ -490,17 +658,19 @@ fn pick_mode(app: &mut FigApp, i: usize) {
     match i {
         0 => {
             app.ui.right_tab = crate::RightTab::Design;
-            app.run("tool.set", json!({"tool": "pencil"}));
+            app.ui.draw_mode = true;
         }
         1 => {
             app.ui.right_tab = crate::RightTab::Design;
-            if app.session.tool.tool == ToolId::Pencil {
-                app.run("tool.set", json!({"tool": "move"}));
-            }
+            app.ui.draw_mode = false;
         }
-        2 => app.ui.right_tab = crate::RightTab::Prototype,
+        2 => {
+            app.ui.right_tab = crate::RightTab::Prototype;
+            app.ui.draw_mode = false;
+        }
         _ => {
             app.ui.right_tab = crate::RightTab::Inspect;
+            app.ui.draw_mode = false;
             // Dev Mode only inspects: an editing tool gives way to Move.
             if !matches!(app.session.tool.tool, ToolId::Move | ToolId::Hand | ToolId::Comment) {
                 app.run("tool.set", json!({"tool": "move"}));
@@ -928,6 +1098,40 @@ mod tests {
         assert_eq!(MODE_W, 122.0);
         assert_eq!(TOOL_CELL + FLYOUT_GAP + FLYOUT_W, 49.0);
         assert_eq!(main_width(GROUPS, false), 529.0 - (FLYOUT_GAP + FLYOUT_W));
+    }
+
+    /// The Draw pill is the kit's 625 pt: Move, the three illustrated tools between dividers,
+    /// Frame, the shapes, Text, Comment, Actions and the mode switcher.
+    #[test]
+    fn the_draw_pill_is_on_the_ui3_grid() {
+        assert_eq!(draw_width(), 625.0);
+        assert_eq!(DRAW_TOOLS.len(), 3);
+    }
+
+    /// The switcher's first segment opens Draw mode (its toolbar and header) and the others leave
+    /// it; the brush and the pencil are the Pencil with a bristle brush or a plain stroke.
+    #[test]
+    fn draw_mode_and_its_tools() {
+        let mut app = FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
+        pick_mode(&mut app, 0);
+        assert!(app.ui.draw_mode && draw_mode(&app));
+        assert_eq!(bar_width(&app), draw_width());
+        pick_draw_tool(&mut app, DrawTool::Brush);
+        assert_eq!((app.session.tool.tool, drawn(&app)), (ToolId::Pencil, Some(DrawTool::Brush)));
+        pick_draw_tool(&mut app, DrawTool::Pencil);
+        assert_eq!((app.session.tool.tool, drawn(&app)), (ToolId::Pencil, Some(DrawTool::Pencil)));
+        pick_draw_tool(&mut app, DrawTool::Pen);
+        assert_eq!(drawn(&app), Some(DrawTool::Pen));
+        for i in 1..4 {
+            pick_mode(&mut app, 0);
+            pick_mode(&mut app, i);
+            assert!(!app.ui.draw_mode, "segment {i} leaves Draw mode");
+        }
+        // Every picture decodes.
+        for (_, name, bytes, [w, h]) in DRAW_TOOLS {
+            let img = image::load_from_memory(bytes).unwrap();
+            assert_eq!((img.width() as f32, img.height() as f32), (w * 4.0, h * 4.0), "{name}");
+        }
     }
 
     /// The stroke widths `icon` paints with in a `size` box at `ppp` pixels per point.

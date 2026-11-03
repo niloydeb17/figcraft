@@ -404,6 +404,9 @@ pub struct UiState {
     /// The right sidebar as drawn this frame, after fitting the window.
     pub right_panel_rect: Option<egui::Rect>,
     pub right_tab: RightTab,
+    /// Draw mode (the mode switcher's first segment): the toolbar's illustrated pen, brush and
+    /// pencil, and a Draw header over the design panel.
+    pub draw_mode: bool,
     /// The tab of the previous frame, to see the right panel change mode.
     pub last_right_tab: RightTab,
     pub left_tab: LeftTab,
@@ -619,6 +622,7 @@ impl Default for UiState {
             right_width: PANEL_DEFAULT,
             right_panel_rect: None,
             right_tab: RightTab::Design,
+            draw_mode: false,
             last_right_tab: RightTab::Design,
             left_tab: LeftTab::File,
             pages_open: true,
