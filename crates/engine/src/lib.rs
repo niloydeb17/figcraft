@@ -77,6 +77,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use sharing::account;
 pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
@@ -160,6 +161,8 @@ pub struct Session {
     pub agent: Option<String>,
     /// Where an attached AI agent last worked ([`Session::agent_presence_at`]): display only.
     pub agent_presence: Option<agent::AgentPresence>,
+    /// Who is signed in, the onboarding answers, and what waits to be sent to their server.
+    pub account: account::AccountState,
 }
 
 impl Default for Session {
@@ -170,6 +173,8 @@ impl Default for Session {
 
 #[cfg(test)]
 mod a11y_keys_tests;
+#[cfg(test)]
+mod account_tests;
 #[cfg(test)]
 mod agent_presence_tests;
 #[cfg(test)]

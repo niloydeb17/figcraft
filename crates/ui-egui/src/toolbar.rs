@@ -418,6 +418,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     let width = tools_w + (dev_width() - tools_w) * grow;
     ui.data_mut(|d| d.insert_temp(anim_id(), (slide, grow, width)));
     let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
+    app.ui.tour_anchors.toolbar = Some(rect);
     let cy = rect.center().y;
     let scroll = pill_scroll(ui, rect, width);
     // A pill wider than the canvas (a phone) scrolls, its divider and switcher after the buttons.

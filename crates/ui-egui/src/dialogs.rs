@@ -206,6 +206,9 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
 /// branch, export preview, colour profile, plugin, live join/publish, online dialogs and
 /// close confirmation.
 pub fn show(app: &mut FigApp, ctx: &Context) {
+    // The editor tour, and a new account's onboarding over everything.
+    crate::tour::show(app, ctx);
+    crate::onboarding::show(app, ctx);
     // Dropped files waiting to open: their card, then (once it has shown) the files.
     crate::pending_open::pending_opens(app, ctx);
     crate::import_report::show(app, ctx);

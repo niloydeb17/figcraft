@@ -368,7 +368,9 @@ fn junk_requests_never_panic() {
     // Random fields straight into the handler too.
     for _ in 0..500 {
         let junk: String = (0..(next() % 40)).map(|_| char::from_u32((next() % 0x3000) as u32).unwrap_or('x')).collect();
-        for path in ["/login", "/logout", "/auth/admin", "/auth/google", "/auth/google/callback", "/auth/me", "/auth/check"] {
+        for path in
+            ["/login", "/logout", "/auth/admin", "/auth/google", "/auth/google/callback", "/auth/me", "/auth/check", "/auth/profile", "/auth/invite"]
+        {
             let mut r = post(path, &junk, Some(&junk));
             r.query = junk.clone();
             let _ = handle(&c, &r);
@@ -436,4 +438,72 @@ fn accounts_settings_are_checked() {
     assert!(g.check().is_ok());
     let parsed: Config = toml::from_str("accounts_listen = \"0.0.0.0:47901\"\nsignup = false\nsession_days = 7\n").unwrap();
     assert!(!parsed.signup && parsed.session_days == 7.0);
+}
+
+fn post_json(path: &str, body: &str, cookie: &str) -> Request {
+    let mut r = post(path, body, Some(cookie));
+    r.headers.push(("content-type".into(), "application/json".into()));
+    r
+}
+
+#[test]
+fn onboarding_answers_are_kept_on_the_account() {
+    let dir = TempDir::new("acc-profile");
+    let c = ctx(&dir, true);
+    let t = token(&handle(&c, &post("/login", "email=jo%40example.com&password=12345678", None)));
+    let me = body(&handle(&c, &get("/auth/me", "", Some(&t))));
+    assert!(me.contains("\"onboarded\":false") && me.contains("\"inviteLink\":\"https://figcraft.example.com/login\""), "{me}");
+
+    let r = handle(
+        &c,
+        &post_json(
+            "/auth/profile",
+            r#"{"name":"Jo Park","role":"design","experience":"first","plan":"starter","createFirst":"app","tips":true}"#,
+            &t,
+        ),
+    );
+    assert_eq!(r.status, 200, "{}", body(&r));
+    assert!(body(&r).contains("\"name\":\"Jo Park\"") && body(&r).contains("\"role\":\"design\"") && body(&r).contains("\"tips\":true"));
+    let r = handle(&c, &post_json("/auth/profile", r#"{"role":"other","roleOther":"Art direction","onboarded":true}"#, &t));
+    assert!(body(&r).contains("\"roleOther\":\"Art direction\"") && body(&r).contains("\"experience\":\"first\""), "only what's given changes");
+
+    for bad in [
+        r#"{"role":"wizard"}"#,
+        r#"{"plan":"gold"}"#,
+        r#"{"name":"   "}"#,
+        r#"{"roleOther":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#,
+        "nope",
+    ] {
+        assert_eq!(handle(&c, &post_json("/auth/profile", bad, &t)).status, 400, "{bad}");
+    }
+    // Kept across a restart.
+    let again = Accounts::open(dir.path(), true, 21.0).unwrap();
+    let u = again.by_email("jo@example.com").unwrap();
+    assert_eq!((u.name.as_str(), u.profile.role.as_str(), u.profile.onboarded), ("Jo Park", "other", true));
+
+    // Signed out, or from another site: refused.
+    assert_eq!(handle(&c, &post_json("/auth/profile", r#"{"role":"design"}"#, "forged")).status, 401);
+    let mut cross = post_json("/auth/profile", r#"{"role":"design"}"#, &t);
+    cross.headers[0].1 = "https://evil.example".into();
+    assert_eq!(handle(&c, &cross).status, 403);
+}
+
+#[test]
+fn invites_are_kept_and_cleaned() {
+    let dir = TempDir::new("acc-invite");
+    let c = ctx(&dir, true);
+    let t = token(&handle(&c, &post("/login", "email=kai%40example.com&password=12345678", None)));
+    let r = handle(
+        &c,
+        &post_json("/auth/invite", r#"{"emails":["Sneha@Example.com"," ","kai@example.com","sneha@example.com","oscar@example.com"]}"#, &t),
+    );
+    assert_eq!(r.status, 200, "{}", body(&r));
+    assert!(body(&r).contains(r#""invited":["sneha@example.com","oscar@example.com"]"#) && body(&r).contains("\"emailed\":false"), "{}", body(&r));
+    // Asked again: nothing new.
+    assert!(body(&handle(&c, &post_json("/auth/invite", r#"{"emails":["oscar@example.com"]}"#, &t))).contains(r#""invited":[]"#));
+    assert!(body(&handle(&c, &get("/auth/me", "", Some(&t)))).contains(r#""invited":["sneha@example.com","oscar@example.com"]"#));
+    assert_eq!(handle(&c, &post_json("/auth/invite", r#"{"emails":["not an email"]}"#, &t)).status, 400);
+    let many: Vec<String> = (0..21).map(|i| format!("\"p{i}@example.com\"")).collect();
+    assert_eq!(handle(&c, &post_json("/auth/invite", &format!("{{\"emails\":[{}]}}", many.join(",")), &t)).status, 400);
+    assert_eq!(handle(&c, &post_json("/auth/invite", r#"{"emails":["x@example.com"]}"#, "forged")).status, 401);
 }

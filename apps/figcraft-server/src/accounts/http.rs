@@ -7,6 +7,8 @@
 //! | `POST /login` | `email`, `password`, `next`: signs in, or makes the account when there is none |
 //! | `POST /logout` | signs this browser out |
 //! | `GET /auth/me` | `{"signedIn": true, "user": {id, email, name}}`, or 401 |
+//! | `POST /auth/profile` | JSON `{name?, role?, roleOther?, experience?, plan?, createFirst?, tips?, onboarded?}`: the onboarding answers |
+//! | `POST /auth/invite` | JSON `{emails: [...]}`: people to invite; `{invited, link, emailed: false}` (no email is sent yet) |
 //! | `GET /auth/check` | 204 when signed in, else 401 (the proxy asks before serving the app) |
 //! | `GET /auth/google` | starts signing in with Google (when it is set up) |
 //! | `GET /auth/google/callback` | where Google sends the browser back |
@@ -281,16 +283,57 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             Response { status, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() }
         }
         ("GET", "/auth/me") => match current(ctx, req) {
-            Some(u) => Response::json(200, &serde_json::json!({"signedIn": true, "user": {"id": u.id, "email": u.email, "name": u.name}})),
+            Some(u) => Response::json(200, &me(ctx, &u)),
             None => Response::json(401, &serde_json::json!({"signedIn": false})),
         },
+        ("POST", "/auth/profile") => signed_in_json(ctx, req, |ctx, u| {
+            let update: super::ProfileUpdate = serde_json::from_slice(&req.body).map_err(|_| "not a profile change".to_string())?;
+            let user = ctx.accounts().update_profile(&u.id, &update)?;
+            Ok(me(ctx, &user))
+        }),
+        ("POST", "/auth/invite") => signed_in_json(ctx, req, |ctx, u| {
+            #[derive(Deserialize)]
+            struct Body {
+                emails: Vec<String>,
+            }
+            let body: Body = serde_json::from_slice(&req.body).map_err(|_| "not a list of emails".to_string())?;
+            let invited = ctx.accounts().invite(&u.id, &body.emails)?;
+            Ok(serde_json::json!({"invited": invited, "link": invite_link(ctx), "emailed": false}))
+        }),
         ("GET", "/auth/google") => google_start(ctx, req),
         ("GET", "/auth/google/callback") => google_back(ctx, req),
         ("POST", "/auth/admin") => admin(ctx, req),
-        (_, "/login" | "/logout" | "/auth/me" | "/auth/check" | "/auth/admin") => {
+        (_, "/login" | "/logout" | "/auth/me" | "/auth/check" | "/auth/admin" | "/auth/profile" | "/auth/invite") => {
             Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site))
         }
         _ => Response::html(404, pages::message("Page not found", "There's nothing at this address.", &ctx.settings.site)),
+    }
+}
+
+/// `/auth/me`'s answer for a signed-in account.
+fn me(ctx: &Ctx, u: &User) -> serde_json::Value {
+    let invited = ctx.accounts().invites_by(&u.id);
+    serde_json::json!({
+        "signedIn": true,
+        "user": {"id": u.id, "email": u.email, "name": u.name, "profile": u.profile, "invited": invited},
+        "inviteLink": invite_link(ctx),
+    })
+}
+
+/// The address to send people so they can sign up.
+fn invite_link(ctx: &Ctx) -> String {
+    format!("{}/login", ctx.settings.origin.as_deref().unwrap_or_default())
+}
+
+/// A JSON request from a signed-in browser of this site: `f`'s answer, or why not.
+fn signed_in_json(ctx: &Ctx, req: &Request, f: impl FnOnce(&Ctx, &User) -> Result<serde_json::Value, String>) -> Response {
+    if !same_site(ctx, req) {
+        return Response::json(403, &serde_json::json!({"error": "that request came from another site"}));
+    }
+    let Some(u) = current(ctx, req) else { return Response::json(401, &serde_json::json!({"error": "not signed in"})) };
+    match f(ctx, &u) {
+        Ok(v) => Response::json(200, &v),
+        Err(e) => Response::json(400, &serde_json::json!({"error": e})),
     }
 }
 

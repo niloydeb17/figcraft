@@ -84,7 +84,7 @@ pub fn start() {
                             log::error!("couldn't install window.figcraft: {e:?}");
                         }
                     }
-                    Ok(Box::new(WebShell { fig, cloud }))
+                    Ok(Box::new(WebShell { fig, cloud, account: crate::account::Account::default() }))
                 }),
             )
             .await;
@@ -169,6 +169,8 @@ struct WebShell {
     fig: FigApp,
     /// Files kept on the page's server and the address that names the open one.
     cloud: crate::cloud::Cloud,
+    /// Who is signed in on the page's server, and the onboarding answers on their way to it.
+    account: crate::account::Account,
 }
 
 impl eframe::App for WebShell {
@@ -197,6 +199,7 @@ impl eframe::App for WebShell {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
         self.cloud.tick(&mut self.fig, ui.ctx());
+        self.account.tick(&mut self.fig, ui.ctx());
         set_page_title(&self.fig);
         crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,

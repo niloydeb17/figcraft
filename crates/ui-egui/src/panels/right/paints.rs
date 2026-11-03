@@ -305,6 +305,9 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
         &[(Icon::Styles, tr("Styles")), (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") })],
         empty,
     );
+    if fills {
+        app.ui.tour_anchors.fill = Some(header.rect);
+    }
     if let Some(i) = clicked {
         if i == 1 {
             // The new paint goes on top; open its picker. A mixed selection has no one index to edit.

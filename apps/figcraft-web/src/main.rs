@@ -29,6 +29,12 @@
 //! bar and the browser history keep it, so the URL is as private as the link itself.
 
 #[cfg(target_arch = "wasm32")]
+mod account;
+#[cfg(any(target_arch = "wasm32", test))]
+mod account_me;
+#[cfg(test)]
+mod account_me_tests;
+#[cfg(target_arch = "wasm32")]
 mod api;
 #[cfg(target_arch = "wasm32")]
 mod cloud;

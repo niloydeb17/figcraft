@@ -351,10 +351,12 @@ pub use control::{ControlReply, ControlRequest, RequestGate, RequestState};
 
 mod app;
 mod clock;
+mod onboarding;
 mod open;
 mod selection_cache;
 mod services;
 mod state;
+mod tour;
 
 pub(crate) use clock::repaint_in;
 pub use clock::{AUTO_SAVE_SECS, AUTOSAVE_SECS, FrameClock, ToastClock};
@@ -469,6 +471,12 @@ pub struct UiState {
     pub icon_gallery: bool,
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
+    /// The first-run onboarding's answers while its steps show (a new account's).
+    pub onboarding: Option<onboarding::Flow>,
+    /// The editor tour's step, while it shows.
+    pub tour: Option<usize>,
+    /// What the tour points at, as drawn this frame.
+    pub tour_anchors: tour::Anchors,
     pub present: Option<present::Presenter>,
     pub presents: Vec<present::PresentTab>,
     /// The tab shown last. It is on screen while `present` has a value.
@@ -660,6 +668,9 @@ impl Default for UiState {
             title_bar: TitleBar::Native,
             icon_gallery: false,
             toast: None,
+            onboarding: None,
+            tour: None,
+            tour_anchors: tour::Anchors::default(),
             present: None,
             presents: Vec::new(),
             present_active: None,

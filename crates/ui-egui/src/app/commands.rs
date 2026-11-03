@@ -184,6 +184,10 @@ impl FigApp {
                     self.ui.home = true;
                     self.ui.home_view.section = home::Section::Templates;
                 }
+                "dialog.tour" => {
+                    self.ui.home = false;
+                    self.ui.tour = Some(0);
+                }
                 "home.gettingStarted" => {
                     self.ui.home = true;
                     self.ui.home_view.section = home::Section::Recents;

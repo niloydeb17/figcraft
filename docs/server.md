@@ -360,6 +360,12 @@ terms_url = ""                              # shown under the form when set
   sessions (nginx: `auth_request`). [`packaging/web/Dockerfile.kubelet`](../packaging/web/Dockerfile.kubelet)
   does this and shows the homepage (`homepage/`) to everyone else. Apps that can't sign in yet
   (the desktop app, `figcraft-cli`) then can't reach the server through that proxy.
+- **Onboarding.** The first time an account opens the browser build, the app asks for a name, a
+  role, people to invite, how well it knows FigCraft, a plan (nothing is billed; every plan is free
+  during the beta) and what to make first, then opens that file with a five-step tour. The answers
+  are kept on the account (`POST /auth/profile`, shown by `GET /auth/me` under `profile`), and the
+  addresses invited in `<data>/accounts/invites.json` (`POST /auth/invite`); with no email set up,
+  the app copies the sign-up link for the person to send.
 - **No email yet.** Nothing sends mail: emails aren't verified and there is no reset link. The
   operator resets a password instead.
 

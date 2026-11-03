@@ -33,6 +33,7 @@ impl Session {
             pending_events: Vec::new(),
             agent: None,
             agent_presence: None,
+            account: crate::account::AccountState::default(),
         }
     }
 

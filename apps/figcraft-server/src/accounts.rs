@@ -22,6 +22,7 @@ use crate::store::{hash, now};
 pub const DIR: &str = "accounts";
 const USERS: &str = "users.json";
 const SESSIONS: &str = "sessions.json";
+const INVITES: &str = "invites.json";
 
 /// Most accounts kept, sessions per account (the oldest goes first) and sessions in all.
 pub const MAX_USERS: usize = 100_000;
@@ -71,6 +72,76 @@ pub struct User {
     pub last_login: u64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
+    /// What the person said about themselves when they first signed in (the app's onboarding).
+    #[serde(default)]
+    pub profile: Profile,
+}
+
+/// The onboarding answers. Every value is one of the listed choices or empty (not answered).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Profile {
+    /// [`ROLES`].
+    pub role: String,
+    /// What "other" means, typed (at most 60 characters).
+    pub role_other: String,
+    /// [`EXPERIENCE`].
+    pub experience: String,
+    /// [`PLANS`] (nothing is billed: the choice is kept for later).
+    pub plan: String,
+    /// [`CREATE_FIRST`].
+    pub create_first: String,
+    /// Wants tips and updates by email.
+    pub tips: bool,
+    /// Finished (or skipped) onboarding: the app doesn't show it again.
+    pub onboarded: bool,
+}
+
+pub const ROLES: &[&str] = &[
+    "design",
+    "research",
+    "ux-writing",
+    "student",
+    "data-analytics",
+    "software-development",
+    "marketing",
+    "product-management",
+    "educator",
+    "other",
+];
+pub const EXPERIENCE: &[&str] = &["many", "few", "first"];
+pub const PLANS: &[&str] = &["starter", "professional", "organization"];
+pub const CREATE_FIRST: &[&str] = &["app", "website", "graphic", "animation", "presentation", "whiteboard"];
+
+/// Most invites an account keeps, and per request.
+pub const MAX_INVITES: usize = 200;
+pub const INVITES_AT_ONCE: usize = 20;
+
+/// A change to the profile: only the fields given change.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProfileUpdate {
+    pub name: Option<String>,
+    pub role: Option<String>,
+    pub role_other: Option<String>,
+    pub experience: Option<String>,
+    pub plan: Option<String>,
+    pub create_first: Option<String>,
+    pub tips: Option<bool>,
+    pub onboarded: Option<bool>,
+}
+
+/// Someone an account asked to join.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Invite {
+    pub by: String,
+    pub email: String,
+    pub at: u64,
+}
+
+fn choice(field: &str, v: &str, allowed: &[&str]) -> Result<String, String> {
+    let v = v.trim();
+    if v.is_empty() || allowed.contains(&v) { Ok(v.to_string()) } else { Err(format!("`{field}` is one of {} (or empty)", allowed.join(", "))) }
 }
 
 /// A signed-in browser: only the token's hash is kept.
@@ -125,6 +196,7 @@ pub struct Accounts {
     failures: HashMap<String, VecDeque<u64>>,
     /// When the last accounts were made.
     signups: VecDeque<u64>,
+    invites: Vec<Invite>,
 }
 
 /// An email address as accounts keep it (trimmed, lowercase), or `None` when it isn't one.
@@ -174,10 +246,11 @@ impl Accounts {
         dirs.create(&dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
         let users: Vec<User> = read_json(&dir.join(USERS))?.unwrap_or_default();
         let sessions: Vec<Session> = read_json(&dir.join(SESSIONS))?.unwrap_or_default();
+        let invites: Vec<Invite> = read_json(&dir.join(INVITES))?.unwrap_or_default();
         let idle = if idle_days.is_finite() && idle_days > 0.0 { (idle_days * 86_400.0).min(3650.0 * 86_400.0) as u64 } else { 21 * 86_400 };
         let t = now();
         let sessions = sessions.into_iter().filter(|s| t.saturating_sub(s.used) < idle).map(|s| (s.hash.clone(), s)).collect();
-        Ok(Accounts { dir, users, sessions, signup, idle, failures: HashMap::new(), signups: VecDeque::new() })
+        Ok(Accounts { dir, users, sessions, signup, idle, failures: HashMap::new(), signups: VecDeque::new(), invites })
     }
 
     /// Whether anyone may sign up.
@@ -275,8 +348,17 @@ impl Accounts {
         if self.signups.len() >= SIGNUPS_PER_HOUR {
             return Err(SIGNUP_BUSY.into());
         }
-        let user =
-            User { id: token::file_id()?, name: display_name(name, &email), email, password, google, created: t, last_login: 0, disabled: false };
+        let user = User {
+            id: token::file_id()?,
+            name: display_name(name, &email),
+            email,
+            password,
+            google,
+            created: t,
+            last_login: 0,
+            disabled: false,
+            profile: Profile::default(),
+        };
         self.users.push(user.clone());
         if let Err(e) = self.save_users() {
             self.users.pop();
@@ -401,7 +483,85 @@ impl Accounts {
         let i = self.index(email).ok_or_else(|| format!("no account for {email}"))?;
         let u = self.users.remove(i);
         self.sessions.retain(|_, s| s.user != u.id);
+        self.invites.retain(|x| x.by != u.id);
+        write_json(&self.dir.join(INVITES), &self.invites)?;
         self.save()
+    }
+
+    /// Change `user`'s name and onboarding answers; the account as it is now.
+    pub fn update_profile(&mut self, user: &str, u: &ProfileUpdate) -> Result<User, String> {
+        let Some(i) = self.users.iter().position(|x| x.id == user) else { return Err("no such account".into()) };
+        let mut next = self.users.get(i).cloned().ok_or("no such account")?;
+        if let Some(n) = &u.name {
+            let n: String = n.trim().chars().filter(|c| !c.is_control()).collect();
+            if n.is_empty() || n.chars().count() > 128 {
+                return Err("`name` is 1 to 128 characters".into());
+            }
+            next.name = n;
+        }
+        let p = &mut next.profile;
+        if let Some(v) = &u.role {
+            p.role = choice("role", v, ROLES)?;
+        }
+        if let Some(v) = &u.role_other {
+            let v: String = v.trim().chars().filter(|c| !c.is_control()).collect();
+            if v.chars().count() > 60 {
+                return Err("`roleOther` is at most 60 characters".into());
+            }
+            p.role_other = v;
+        }
+        if let Some(v) = &u.experience {
+            p.experience = choice("experience", v, EXPERIENCE)?;
+        }
+        if let Some(v) = &u.plan {
+            p.plan = choice("plan", v, PLANS)?;
+        }
+        if let Some(v) = &u.create_first {
+            p.create_first = choice("createFirst", v, CREATE_FIRST)?;
+        }
+        if let Some(v) = u.tips {
+            p.tips = v;
+        }
+        if let Some(v) = u.onboarded {
+            p.onboarded = v;
+        }
+        if let Some(slot) = self.users.get_mut(i) {
+            *slot = next.clone();
+        }
+        self.save_users()?;
+        Ok(next)
+    }
+
+    /// Keep `user`'s invites to `emails` (cleaned; ones already asked are skipped). The addresses
+    /// kept, or why none could be.
+    pub fn invite(&mut self, user: &str, emails: &[String]) -> Result<Vec<String>, String> {
+        if emails.len() > INVITES_AT_ONCE {
+            return Err(format!("at most {INVITES_AT_ONCE} invites at once"));
+        }
+        let me = self.user(user).map(|u| u.email.clone()).ok_or("no such account")?;
+        let mut clean = Vec::new();
+        for e in emails {
+            if e.trim().is_empty() {
+                continue;
+            }
+            let c = clean_email(e).ok_or_else(|| format!("{} isn't an email address", e.trim()))?;
+            if c != me && !clean.contains(&c) {
+                clean.push(c);
+            }
+        }
+        clean.retain(|c| !self.invites.iter().any(|i| i.by == user && &i.email == c));
+        if self.invites.iter().filter(|i| i.by == user).count() + clean.len() > MAX_INVITES {
+            return Err(format!("an account keeps at most {MAX_INVITES} invites"));
+        }
+        let t = now();
+        self.invites.extend(clean.iter().map(|e| Invite { by: user.to_string(), email: e.clone(), at: t }));
+        write_json(&self.dir.join(INVITES), &self.invites)?;
+        Ok(clean)
+    }
+
+    /// Who `user` has invited.
+    pub fn invites_by(&self, user: &str) -> Vec<String> {
+        self.invites.iter().filter(|i| i.by == user).map(|i| i.email.clone()).collect()
     }
 
     /// Every account, oldest first.

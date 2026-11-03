@@ -2,7 +2,9 @@
 
 > **Status:** phase 1 begun, 2026-11-03: the server's sign-in page (email and password, Google
 > when set up), sessions and `figcraft-server users` are built ([`server.md`](server.md#accounts)).
-> Still to come in phase 1: browser sign-in from the desktop app, and the app's account menu. Closes most of gap 2 ("Multiplayer and sharing
+> The browser build knows who is signed in and shows a new account the onboarding steps and an
+> editor tour (`account.*`, `onboarding.*`, `help.tour`). Still to come in phase 1: browser sign-in
+> from the desktop app, and the app's account menu. Closes most of gap 2 ("Multiplayer and sharing
 > are a preview, without accounts") in [`gaps.md`](gaps.md).
 
 FigCraft's files can live on a `figcraft-server` that the team runs (one VPS is enough), the way
