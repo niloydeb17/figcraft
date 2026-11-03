@@ -342,7 +342,8 @@ terms_url = ""                              # shown under the form when set
 ```
 
 - **Signing in.** `/login` asks for an email and password. An email with no account makes one
-  (passwords of 8 to 256 characters); one with an account logs in. Passwords are kept as argon2id
+  (passwords of 8 to 256 characters); one with an account logs in, and goes on to the app (`/`, or
+  the page in `?next=/path`). Passwords are kept as argon2id
   hashes and sessions as hashes of their tokens, in `<data>/accounts/` (`users.json`,
   `sessions.json`). The browser gets an HTTP-only, `SameSite=Lax` cookie (`Secure` when `web_url`
   is `https://`). Ten wrong passwords in 15 minutes pause an account's sign-in for 15 minutes, and
@@ -352,6 +353,11 @@ terms_url = ""                              # shown under the form when set
   secret in the environment as `FIGCRAFT_GOOGLE_CLIENT_SECRET` (never in the settings file). The
   page then shows **Continue with Google**. A Google sign-in whose verified email has an account
   joins it, and that account's password is dropped (nobody checked that email when it was made).
+- **The app for signed-in people only.** `GET /auth/check` answers 204 for a signed-in browser
+  and 401 otherwise, for a reverse proxy to ask before serving the browser build and its live
+  sessions (nginx: `auth_request`). [`packaging/web/Dockerfile.kubelet`](../packaging/web/Dockerfile.kubelet)
+  does this and shows the homepage (`homepage/`) to everyone else. Apps that can't sign in yet
+  (the desktop app, `figcraft-cli`) then can't reach the server through that proxy.
 - **No email yet.** Nothing sends mail: emails aren't verified and there is no reset link. The
   operator resets a password instead.
 

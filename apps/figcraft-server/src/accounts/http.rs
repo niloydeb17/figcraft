@@ -7,6 +7,7 @@
 //! | `POST /login` | `email`, `password`, `next`: signs in, or makes the account when there is none |
 //! | `POST /logout` | signs this browser out |
 //! | `GET /auth/me` | `{"signedIn": true, "user": {id, email, name}}`, or 401 |
+//! | `GET /auth/check` | 204 when signed in, else 401 (the proxy asks before serving the app) |
 //! | `GET /auth/google` | starts signing in with Google (when it is set up) |
 //! | `GET /auth/google/callback` | where Google sends the browser back |
 //! | `POST /auth/admin` | the operator's `users` commands (this machine only, with the server key) |
@@ -165,6 +166,7 @@ impl Response {
     pub fn encode(&self) -> Vec<u8> {
         let reason = match self.status {
             200 => "OK",
+            204 => "No Content",
             303 => "See Other",
             400 => "Bad Request",
             401 => "Unauthorized",
@@ -233,7 +235,7 @@ fn form_page(ctx: &Ctx, status: u16, error: &str, email: &str, next: &str) -> Re
     Response::html(status, pages::login(&form, &ctx.settings.site))
 }
 
-/// Signed in as `user`: the cookie, then on to `next` (or the account page).
+/// Signed in as `user`: the cookie, then on to `next` (or the app).
 fn signed_in(ctx: &Ctx, user: &str, next: &str) -> Response {
     let token = match ctx.accounts().start_session(user) {
         Ok(t) => t,
@@ -245,7 +247,7 @@ fn signed_in(ctx: &Ctx, user: &str, next: &str) -> Response {
             );
         }
     };
-    Response::redirect(if next.is_empty() { "/login" } else { next }).cookie(session_cookie(&ctx.settings, &token))
+    Response::redirect(if next.is_empty() { "/" } else { next }).cookie(session_cookie(&ctx.settings, &token))
 }
 
 /// Answer one request.
@@ -273,6 +275,11 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             }
             Response::redirect("/login").cookie(clear_cookie(&ctx.settings, COOKIE, "/"))
         }
+        // Asked by the reverse proxy for every request to the app: only a signed-in browser gets it.
+        ("GET" | "HEAD", "/auth/check") => {
+            let status = if current(ctx, req).is_some() { 204 } else { 401 };
+            Response { status, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() }
+        }
         ("GET", "/auth/me") => match current(ctx, req) {
             Some(u) => Response::json(200, &serde_json::json!({"signedIn": true, "user": {"id": u.id, "email": u.email, "name": u.name}})),
             None => Response::json(401, &serde_json::json!({"signedIn": false})),
@@ -280,7 +287,7 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
         ("GET", "/auth/google") => google_start(ctx, req),
         ("GET", "/auth/google/callback") => google_back(ctx, req),
         ("POST", "/auth/admin") => admin(ctx, req),
-        (_, "/login" | "/logout" | "/auth/me" | "/auth/admin") => {
+        (_, "/login" | "/logout" | "/auth/me" | "/auth/check" | "/auth/admin") => {
             Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site))
         }
         _ => Response::html(404, pages::message("Page not found", "There's nothing at this address.", &ctx.settings.site)),

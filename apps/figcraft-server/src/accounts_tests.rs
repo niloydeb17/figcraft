@@ -85,10 +85,15 @@ fn signing_up_then_in_and_out() {
 
     // Logging in again: right password, then wrong.
     let again = handle(&c, &post("/login", "email=ada%40example.com&password=correct+horse", None));
-    assert_eq!((again.status, header(&again, "Location")), (303, Some("/login")));
+    assert_eq!((again.status, header(&again, "Location")), (303, Some("/")), "on to the app");
     let wrong = handle(&c, &post("/login", "email=ada%40example.com&password=battery+staple", None));
     assert_eq!(wrong.status, 401);
     assert!(body(&wrong).contains(accounts::WRONG_PASSWORD.replace('\'', "&#39;").as_str()) && body(&wrong).contains("value=\"ada@example.com\""));
+
+    // The proxy's check before serving the app.
+    assert_eq!(handle(&c, &get("/auth/check", "", Some(&t))).status, 204);
+    assert_eq!(handle(&c, &get("/auth/check", "", None)).status, 401);
+    assert_eq!(handle(&c, &get("/auth/check", "", Some("forged"))).status, 401);
 
     // Logging out ends that session only.
     let out = handle(&c, &post("/logout", "", Some(&t)));
@@ -96,6 +101,7 @@ fn signing_up_then_in_and_out() {
     assert!(header(&out, "Set-Cookie").unwrap().contains("Max-Age=0"));
     assert_eq!(handle(&c, &get("/auth/me", "", Some(&t))).status, 401);
     assert_eq!(handle(&c, &get("/auth/me", "", Some(&token(&again)))).status, 200);
+    assert_eq!(handle(&c, &get("/auth/check", "", Some(&t))).status, 401, "signed out: no app");
 }
 
 #[test]
@@ -214,7 +220,7 @@ fn next_stays_on_this_site() {
     let dir = TempDir::new("acc-next");
     let c = ctx(&dir, true);
     let r = handle(&c, &post("/login", "email=fi%40example.com&password=12345678&next=%2F%2Fevil.example", None));
-    assert_eq!(header(&r, "Location"), Some("/login"));
+    assert_eq!(header(&r, "Location"), Some("/"));
 }
 
 fn id_token(claims: &serde_json::Value) -> String {
@@ -353,7 +359,7 @@ fn junk_requests_never_panic() {
     // Random fields straight into the handler too.
     for _ in 0..500 {
         let junk: String = (0..(next() % 40)).map(|_| char::from_u32((next() % 0x3000) as u32).unwrap_or('x')).collect();
-        for path in ["/login", "/logout", "/auth/admin", "/auth/google", "/auth/google/callback", "/auth/me"] {
+        for path in ["/login", "/logout", "/auth/admin", "/auth/google", "/auth/google/callback", "/auth/me", "/auth/check"] {
             let mut r = post(path, &junk, Some(&junk));
             r.query = junk.clone();
             let _ = handle(&c, &r);
