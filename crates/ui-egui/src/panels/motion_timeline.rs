@@ -1,5 +1,6 @@
 //! The motion timeline under the canvas: play/pause, the playhead, the current frame's animated
-//! layers with a row per animated field and a diamond per keyframe, ready-made animations and the
+//! layers, each with a bar over the span its animation covers and a row per animated field (an
+//! outlined bar named for the field, with a tick at each keyframe), ready-made animations and the
 //! selected keyframe's value and easing. Everything it changes goes through the `motion.*`
 //! commands; the canvas shows the playhead's moment (`canvas::render::motion_doc`).
 
@@ -35,28 +36,42 @@ const ORIGIN: f32 = 18.0;
 const END_PAD: f32 = 48.0;
 /// The ruler aims for a label every this many pixels (rounded to 1, 2 or 5 × 10ⁿ seconds).
 const LABEL_SPACING: f32 = 200.0;
-/// A keyframe: a diamond reaching this far from its centre, with a 1 px outline.
-const DIAMOND: f32 = 5.0;
-/// The line between two keyframes stops this far from each.
-const LINE_GAP: f32 = 8.0;
+/// A bar leaves this much of its row above and below it.
+const BAR_INSET: f32 = 2.5;
+/// A bar's corners.
+const BAR_RADIUS: u8 = 5;
+/// A keyframe tick: this wide and tall; the ticks at a bar's ends sit this far inside it.
+const TICK_W: f32 = 1.5;
+const TICK_H: f32 = 9.0;
+const TICK_INSET: f32 = 7.0;
+/// The narrowest a bar is drawn (a field with one keyframe), and the width a keyframe's tick
+/// takes clicks over.
+const BAR_MIN: f32 = 2.0 * TICK_INSET + 4.0;
+const TICK_HIT: f32 = 14.0;
 
 /// The timeline's colours: the incumbent's light theme, FigCraft's tokens in the dark one.
 struct Look {
     bg: Color32,
     overlay: Color32,
     row_selected: Color32,
-    row_selected_secondary: Color32,
     row_hover: Color32,
     separator: Color32,
     ruler_text: Color32,
     ruler_stroke: Color32,
-    key_stroke: Color32,
-    key_row_selected: Color32,
+    /// A layer's bar: on a selected layer, and otherwise; its ticks.
+    bar: Color32,
+    bar_idle: Color32,
+    bar_tick: Color32,
+    /// A field's bar: its fill, outline and name (and ticks) on a selected layer, and otherwise.
+    clip_fill: Color32,
+    clip_fill_idle: Color32,
+    clip_stroke: Color32,
+    clip_stroke_idle: Color32,
+    clip_text: Color32,
+    clip_text_idle: Color32,
+    /// A picked keyframe's tick, and one under the pointer.
     key_selected: Color32,
-    key_hover_fill: Color32,
-    key_hover_stroke: Color32,
-    line: Color32,
-    line_selected: Color32,
+    key_hover: Color32,
     brand: Color32,
 }
 
@@ -69,18 +84,21 @@ fn look(t: &Tokens) -> Look {
             bg: t.panel,
             overlay: t.bg,
             row_selected: blue(0.24),
-            row_selected_secondary: blue(0.12),
             row_hover: white(0.06),
             separator: white(0.1),
             ruler_text: white(0.5),
             ruler_stroke: white(0.1),
-            key_stroke: white(0.3),
-            key_row_selected: crate::theme::BRAND,
-            key_selected: crate::theme::BRAND,
-            key_hover_fill: t.hover,
-            key_hover_stroke: crate::theme::BRAND,
-            line: white(0.12),
-            line_selected: crate::theme::BRAND,
+            bar: crate::theme::BRAND,
+            bar_idle: white(0.28),
+            bar_tick: Color32::WHITE,
+            clip_fill: blue(0.14),
+            clip_fill_idle: white(0.04),
+            clip_stroke: crate::theme::BRAND,
+            clip_stroke_idle: white(0.2),
+            clip_text: Color32::from_rgb(0x7c, 0xc4, 0xff),
+            clip_text_idle: white(0.55),
+            key_selected: Color32::WHITE,
+            key_hover: Color32::from_rgb(0x7c, 0xc4, 0xff),
             brand: crate::theme::BRAND,
         };
     }
@@ -88,18 +106,21 @@ fn look(t: &Tokens) -> Look {
         bg: Color32::WHITE,
         overlay: Color32::from_rgb(0xf5, 0xf5, 0xf5),
         row_selected: blue(0.16),
-        row_selected_secondary: blue(0.08),
         row_hover: black(0.04),
         separator: black(0.1),
         ruler_text: black(0.5),
         ruler_stroke: Color32::from_black_alpha(0x1a),
-        key_stroke: black(0.2),
-        key_row_selected: Color32::from_rgb(0x00, 0x7b, 0xe5),
-        key_selected: Color32::from_rgb(0x00, 0x7b, 0xe5),
-        key_hover_fill: Color32::from_rgb(0xf5, 0xf5, 0xf5),
-        key_hover_stroke: Color32::from_rgb(0x0d, 0x99, 0xff),
-        line: black(0.1),
-        line_selected: Color32::from_rgb(0x0d, 0x99, 0xff),
+        bar: Color32::from_rgb(0x00, 0x7b, 0xe5),
+        bar_idle: black(0.28),
+        bar_tick: Color32::WHITE,
+        clip_fill: Color32::from_rgb(0xf0, 0xf7, 0xfe),
+        clip_fill_idle: Color32::from_rgb(0xf7, 0xf7, 0xf7),
+        clip_stroke: Color32::from_rgb(0x0d, 0x99, 0xff),
+        clip_stroke_idle: black(0.2),
+        clip_text: Color32::from_rgb(0x00, 0x7b, 0xe5),
+        clip_text_idle: black(0.5),
+        key_selected: Color32::from_rgb(0x00, 0x4f, 0x99),
+        key_hover: Color32::from_rgb(0x0d, 0x99, 0xff),
         brand: Color32::from_rgb(0x0d, 0x99, 0xff),
     }
 }
@@ -150,8 +171,17 @@ fn clock_id() -> Id {
 
 /// One row of the timeline: a layer's name, or one of its tracks.
 enum Row {
-    Layer { id: NodeId, name: String },
-    Track { id: NodeId, field: MotionField, times: Vec<(f64, bool)> },
+    /// `span`: the first and last keyframe times over all its fields.
+    Layer {
+        id: NodeId,
+        name: String,
+        span: Option<(f64, f64)>,
+    },
+    Track {
+        id: NodeId,
+        field: MotionField,
+        times: Vec<(f64, bool)>,
+    },
 }
 
 /// Move the playhead on while playing (called every frame, whether or not the panel shows).
@@ -184,23 +214,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
     ui.painter().rect_filled(full, CornerRadius::ZERO, t.panel);
     ui.painter().hline(full.x_range(), full.top() + 0.5, Stroke::new(1.0, t.border));
 
-    // Rows: the frame's animated layers, then selected layers in it that aren't animated yet.
-    let mut layers: Vec<NodeId> = frame.map(|f| doc.animated_in(f)).unwrap_or_default();
-    for s in &selection {
-        if frame.is_some_and(|f| *s != f && doc.top_level_frame(*s) == Some(f)) && !layers.contains(s) {
-            layers.push(*s);
-        }
-    }
-    let mut rows = Vec::new();
-    for id in &layers {
-        let Some(n) = doc.node(*id) else { continue };
-        rows.push(Row::Layer { id: *id, name: n.name.clone() });
-        if let Some(m) = n.motion.as_ref() {
-            for (field, track) in m.fields() {
-                rows.push(Row::Track { id: *id, field, times: track.keyframes.iter().map(|k| (k.time, k.hold)).collect() });
-            }
-        }
-    }
+    let rows = rows_of(&doc, frame, &selection);
 
     let picked: Option<Picked> = ui.data(|d| d.get_temp(picked_id()));
 
@@ -260,7 +274,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
         let r = Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), ROW_H));
         let hovered = ui.rect_contains_pointer(r);
         match row {
-            Row::Layer { id, name } => {
+            Row::Layer { id, name, span } => {
                 let selected = selection.contains(id);
                 let bg = if selected {
                     lk.row_selected
@@ -284,16 +298,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
                 );
                 clip_painter.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, clip(name, 28), FontId::proportional(11.0), text);
                 add_field_menu(app, ui, Rect::from_min_size(pos2(names.right() - 24.0, r.top() + 2.0), vec2(20.0, 20.0)), *id, i);
+                if let Some((a, b)) = span {
+                    layer_bar(&key_painter, &lk, bar_rect(x_of(*a), x_of(*b), r), selected);
+                }
             }
             Row::Track { id, field, times } => {
                 let row_selected = selection.contains(id);
-                let bg = if row_selected {
-                    lk.row_selected_secondary
-                } else if hovered {
-                    lk.row_hover
-                } else {
-                    Color32::TRANSPARENT
-                };
+                // Only the layer's own row is tinted when it is selected; its fields' bars say so.
+                let bg = if hovered { lk.row_hover } else { Color32::TRANSPARENT };
                 clip_painter.rect_filled(r, CornerRadius::ZERO, bg);
                 clip_painter.text(
                     pos2(r.left() + 46.0, r.center().y),
@@ -302,24 +314,33 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
                     FontId::proportional(11.0),
                     if row_selected { t.text } else { t.text_secondary },
                 );
-                // The lines between keyframes, stopping short of each diamond.
-                let line = if row_selected { lk.line_selected } else { lk.line };
-                for pair in times.windows(2) {
-                    let [a, b] = pair else { continue };
-                    let (xa, xb) = (x_of(a.0) + LINE_GAP, x_of(b.0) - LINE_GAP);
-                    if xb > xa {
-                        key_painter.hline(xa..=xb, r.center().y.floor() + 0.5, Stroke::new(1.0, line));
-                    }
+                // The field's bar from its first keyframe to its last (as dragged), named for it.
+                let shown: Vec<f64> = times
+                    .iter()
+                    .map(|(time, _)| {
+                        let me = Picked { id: *id, field: field.key(), time: *time };
+                        drag.as_ref().filter(|d| d.picked == me).map_or(*time, |d| d.to)
+                    })
+                    .collect();
+                let (lo, hi) = shown.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(*t), b.max(*t)));
+                let bar = (lo <= hi).then(|| bar_rect(x_of(lo), x_of(hi), r));
+                if let Some(bar) = bar {
+                    field_bar(&key_painter, &lk, bar, &field.label(), row_selected);
                 }
-                let inner_bg = if bg == Color32::TRANSPARENT { lk.bg } else { bg };
                 for (k, (time, hold)) in times.iter().enumerate() {
                     let me = Picked { id: *id, field: field.key(), time: *time };
-                    let shown_t = drag.as_ref().filter(|d| d.picked == me).map_or(*time, |d| d.to);
-                    let c = pos2(x_of(shown_t).round(), r.center().y.round());
-                    if c.x < lane.left() - DIAMOND || c.x > lane.right() + DIAMOND {
+                    let shown_t = shown.get(k).copied().unwrap_or(*time);
+                    // The first and last keyframes' ticks sit inside the bar's ends.
+                    let x = match bar {
+                        Some(bar) if shown_t <= lo => bar.left() + TICK_INSET,
+                        Some(bar) if shown_t >= hi => bar.right() - TICK_INSET,
+                        _ => x_of(shown_t),
+                    };
+                    let c = pos2(x.round(), r.center().y.round());
+                    if c.x < lane.left() - TICK_HIT || c.x > lane.right() + TICK_HIT {
                         continue;
                     }
-                    let hit = Rect::from_center_size(c, vec2(DIAMOND * 2.0 + 6.0, ROW_H)).intersect(lane);
+                    let hit = Rect::from_center_size(c, vec2(TICK_HIT, ROW_H)).intersect(lane);
                     let resp = ui.interact(hit, Id::unique("motion_key").with((i, k)), Sense::click_and_drag()).on_hover_text(format!(
                         "{} · {:.2}s",
                         field.label(),
@@ -347,7 +368,21 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
                         ui.data_mut(|m| m.remove::<Drag>(drag_id()));
                     }
                     resp.context_menu(|ui| keyframe_menu(app, ui, &me));
-                    keyframe(&key_painter, c, KeyState { selected: is_picked, hovered: resp.hovered(), row_selected }, *hold, inner_bg, &lk);
+                    let color = if is_picked {
+                        lk.key_selected
+                    } else if resp.hovered() {
+                        lk.key_hover
+                    } else if row_selected {
+                        lk.clip_text
+                    } else {
+                        lk.clip_text_idle
+                    };
+                    key_tick(&key_painter, c, color, *hold);
+                    if is_picked {
+                        // A picked keyframe stands out: a wider tick.
+                        key_tick(&key_painter, c + vec2(-TICK_W, 0.0), color, *hold);
+                        key_tick(&key_painter, c + vec2(TICK_W, 0.0), color, *hold);
+                    }
                 }
             }
         }
@@ -355,6 +390,32 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
     }
 
     playhead(ui, &lk, lane, body.bottom(), x_of(player.playhead.min(length)).round() + 0.5);
+}
+
+/// The timeline's rows: the frame's animated layers, then selected layers in it that aren't
+/// animated yet, each followed by a row per animated field.
+fn rows_of(doc: &figcraft_doc::Document, frame: Option<NodeId>, selection: &[NodeId]) -> Vec<Row> {
+    let mut layers: Vec<NodeId> = frame.map(|f| doc.animated_in(f)).unwrap_or_default();
+    for s in selection {
+        if frame.is_some_and(|f| *s != f && doc.top_level_frame(*s) == Some(f)) && !layers.contains(s) {
+            layers.push(*s);
+        }
+    }
+    let mut rows = Vec::new();
+    for id in &layers {
+        let Some(n) = doc.node(*id) else { continue };
+        let span = n.motion.as_ref().and_then(|m| {
+            let times = m.fields().into_iter().flat_map(|(_, track)| track.keyframes.iter().map(|k| k.time)).filter(|t| t.is_finite());
+            times.fold(None, |acc: Option<(f64, f64)>, t| Some(acc.map_or((t, t), |(a, b)| (a.min(t), b.max(t)))))
+        });
+        rows.push(Row::Layer { id: *id, name: n.name.clone(), span });
+        if let Some(m) = n.motion.as_ref() {
+            for (field, track) in m.fields() {
+                rows.push(Row::Track { id: *id, field, times: track.keyframes.iter().map(|k| (k.time, k.hold)).collect() });
+            }
+        }
+    }
+    rows
 }
 
 /// The playhead at `x`: a pin in the marker strip (rounded top, pointed foot) and a line down the
@@ -434,39 +495,40 @@ fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>()) } else { s.to_string() }
 }
 
-/// How a keyframe shows: picked, under the pointer, on a selected layer's row.
-#[derive(Clone, Copy)]
-struct KeyState {
-    selected: bool,
-    hovered: bool,
-    row_selected: bool,
+/// A layer's bar: the span its animation covers, solid, with a tick inside each end.
+fn layer_bar(p: &egui::Painter, lk: &Look, bar: Rect, selected: bool) {
+    p.rect_filled(bar, CornerRadius::same(BAR_RADIUS), if selected { lk.bar } else { lk.bar_idle });
+    for x in [bar.left() + TICK_INSET, bar.right() - TICK_INSET] {
+        key_tick(p, pos2(x, bar.center().y), lk.bar_tick, false);
+    }
 }
 
-/// A keyframe: a diamond with a 1 px outline (a square for a hold keyframe), filled when picked.
-fn keyframe(p: &egui::Painter, c: Pos2, s: KeyState, hold: bool, row_bg: Color32, lk: &Look) {
-    let shape = |r: f32| -> Vec<Pos2> {
-        if hold {
-            let h = r * 0.8;
-            vec![pos2(c.x - h, c.y - h), pos2(c.x + h, c.y - h), pos2(c.x + h, c.y + h), pos2(c.x - h, c.y + h)]
-        } else {
-            vec![pos2(c.x, c.y - r), pos2(c.x + r, c.y), pos2(c.x, c.y + r), pos2(c.x - r, c.y)]
-        }
-    };
-    let (edge, fill) = if s.selected {
-        (lk.key_selected, lk.key_selected)
-    } else if s.hovered {
-        (lk.key_hover_stroke, lk.key_hover_fill)
-    } else if s.row_selected {
-        (lk.key_row_selected, row_bg)
-    } else {
-        (lk.key_stroke, row_bg)
-    };
-    p.add(egui::Shape::convex_polygon(shape(DIAMOND), edge, Stroke::NONE));
-    // The inside shows the row: the panel first, then the row's (see-through) colour over it.
-    if fill.a() < 255 {
-        p.add(egui::Shape::convex_polygon(shape(DIAMOND - 1.0), lk.bg, Stroke::NONE));
+/// A field's bar: outlined, its name in the middle (when there is room beside the end ticks).
+fn field_bar(p: &egui::Painter, lk: &Look, bar: Rect, label: &str, selected: bool) {
+    let (fill, edge, text) =
+        if selected { (lk.clip_fill, lk.clip_stroke, lk.clip_text) } else { (lk.clip_fill_idle, lk.clip_stroke_idle, lk.clip_text_idle) };
+    p.rect_filled(bar, CornerRadius::same(BAR_RADIUS), fill);
+    p.rect_stroke(bar, CornerRadius::same(BAR_RADIUS), Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    let room = bar.shrink2(vec2(TICK_INSET + 6.0, 0.0));
+    if room.width() > 16.0 {
+        p.with_clip_rect(room.intersect(p.clip_rect())).text(bar.center(), Align2::CENTER_CENTER, label, FontId::proportional(11.0), text);
     }
-    p.add(egui::Shape::convex_polygon(shape(DIAMOND - 1.0), fill, Stroke::NONE));
+}
+
+/// A bar in row `r` from `x0` to `x1` (at least [`BAR_MIN`] wide, about its middle).
+fn bar_rect(x0: f32, x1: f32, r: Rect) -> Rect {
+    let (mut a, mut b) = (x0.round(), x1.round());
+    if b - a < BAR_MIN {
+        let mid = (a + b) / 2.0;
+        (a, b) = ((mid - BAR_MIN / 2.0).round(), (mid + BAR_MIN / 2.0).round());
+    }
+    Rect::from_min_max(pos2(a, r.top() + BAR_INSET), pos2(b, r.bottom() - BAR_INSET))
+}
+
+/// A keyframe's tick at `c`: a short upright line (a small square for a hold keyframe).
+fn key_tick(p: &egui::Painter, c: Pos2, color: Color32, hold: bool) {
+    let size = if hold { vec2(4.0, 4.0) } else { vec2(TICK_W, TICK_H) };
+    p.rect_filled(Rect::from_center_size(c, size), CornerRadius::same(1), color);
 }
 
 /// The ruler: the marker strip (white over the timeline, grey past it) with a dash at each label,
@@ -495,7 +557,8 @@ fn ruler(p: &egui::Painter, lk: &Look, r: Rect, length: f64, x_of: &dyn Fn(f64) 
             lk.ruler_stroke,
         );
         let whole = (s - s.round()).abs() < 1e-9;
-        let text = if whole || step >= 1.0 { format!("{}s", trim(s)) } else { format!("{}ms", ((s - s.floor()) * 1000.0).round()) };
+        // Under a second in milliseconds ("200ms"); from a second on in seconds ("1.2s").
+        let text = if whole || step >= 1.0 || s >= 1.0 { format!("{}s", trim(s)) } else { format!("{}ms", (s * 1000.0).round()) };
         p.text(pos2(x, labels.center().y), Align2::CENTER_CENTER, text, FontId::proportional(11.0), lk.ruler_text);
     }
 }
@@ -578,9 +641,21 @@ fn transport(
         ui.painter().vline(c.right() + 1.0, c.y_range(), Stroke::new(1.0, t.panel));
     }
     ui.painter().galley(pos2(c1.center().x - g1.size().x / 2.0, c1.center().y - g1.size().y / 2.0), g1, t.text);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(c2.shrink2(vec2(2.0, 2.0))));
-    child.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    child.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+    // The length field fills its cell, its digits centred in the playhead time's font and colour
+    // so the two read as one row.
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(c2).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)));
+    {
+        let style = child.style_mut();
+        style.override_font_id = Some(mono.clone());
+        style.visuals.override_text_color = Some(t.text);
+        for w in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active] {
+            w.weak_bg_fill = Color32::TRANSPARENT;
+            w.bg_fill = Color32::TRANSPARENT;
+            w.bg_stroke = Stroke::NONE;
+            w.expansion = 0.0;
+        }
+        style.spacing.button_padding = vec2(0.0, 0.0);
+    }
     let resp = child.add_enabled(
         frame.is_some(),
         egui::DragValue::new(&mut len_ms).range(100.0..=600_000.0).speed(10.0).max_decimals(0).custom_formatter(|v, _| format!("{v:.0}")),

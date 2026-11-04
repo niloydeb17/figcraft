@@ -179,6 +179,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
 #[cfg(test)]
+mod motion_timeline_tests;
+#[cfg(test)]
 mod online_tests;
 #[cfg(test)]
 mod open_issues_tests;
