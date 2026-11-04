@@ -534,7 +534,8 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
 }
 
 fn recents_body(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() && app.session.docs.is_empty() {
+    let none_kept = app.session.account.recents.is_empty() && crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none();
+    if none_kept && app.session.docs.is_empty() {
         // A first run: nothing to reopen yet, so offer something to start from.
         crate::home_recents::first_run_row(app, ui, t);
         if template_header(ui, t, tr("Start from a template"), tr("See all templates")) {

@@ -395,9 +395,18 @@ fn junk_requests_never_panic() {
     // Random fields straight into the handler too.
     for _ in 0..500 {
         let junk: String = (0..(next() % 40)).map(|_| char::from_u32((next() % 0x3000) as u32).unwrap_or('x')).collect();
-        for path in
-            ["/login", "/logout", "/auth/admin", "/auth/google", "/auth/google/callback", "/auth/me", "/auth/check", "/auth/profile", "/auth/invite"]
-        {
+        for path in [
+            "/login",
+            "/logout",
+            "/auth/admin",
+            "/auth/google",
+            "/auth/google/callback",
+            "/auth/me",
+            "/auth/check",
+            "/auth/profile",
+            "/auth/invite",
+            "/auth/recents",
+        ] {
             let mut r = post(path, &junk, Some(&junk));
             r.query = junk.clone();
             let _ = handle(&c, &r);
@@ -533,4 +542,47 @@ fn invites_are_kept_and_cleaned() {
     let many: Vec<String> = (0..21).map(|i| format!("\"p{i}@example.com\"")).collect();
     assert_eq!(handle(&c, &post_json("/auth/invite", &format!("{{\"emails\":[{}]}}", many.join(",")), &t)).status, 400);
     assert_eq!(handle(&c, &post_json("/auth/invite", r#"{"emails":["x@example.com"]}"#, "forged")).status, 401);
+}
+
+/// Each account keeps its own recent files: newest first, renamed in place, forgotten on request,
+/// kept across a restart, and never handed to another account.
+#[test]
+fn recent_files_belong_to_their_account() {
+    let dir = TempDir::new("acc-recents");
+    let c = ctx(&dir, true);
+    let ada = token(&handle(&c, &post("/login", "email=ada%40example.com&password=12345678", None)));
+    let bo = token(&handle(&c, &post("/login", "email=bo%40example.com&password=12345678", None)));
+    assert_eq!(body(&handle(&c, &get("/auth/recents", "", Some(&ada)))), r#"{"files":[]}"#);
+    for (target, name) in [("K7M-2QX-9TD", "Landing"), ("B0A-RD1-XYZ", "Ideas"), ("K7M-2QX-9TD", "Landing v2")] {
+        let r = handle(&c, &post_json("/auth/recents", &format!(r#"{{"open":{{"target":"{target}","name":"{name}","kind":"design"}}}}"#), &ada));
+        assert_eq!(r.status, 200, "{}", body(&r));
+    }
+    let listed = body(&handle(&c, &get("/auth/recents", "", Some(&ada))));
+    let v: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    let names: Vec<&str> = v["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Landing v2", "Ideas"], "newest first, one entry a file");
+    // Someone else's list is their own.
+    assert_eq!(body(&handle(&c, &get("/auth/recents", "", Some(&bo)))), r#"{"files":[]}"#);
+    // Forgotten, and kept across a restart.
+    assert_eq!(handle(&c, &post_json("/auth/recents", r#"{"forget":"B0A-RD1-XYZ"}"#, &ada)).status, 200);
+    let again = Accounts::open(dir.path(), true, 21.0).unwrap();
+    let id = again.by_email("ada@example.com").unwrap().id.clone();
+    let kept = again.recents(&id);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].name, "Landing v2");
+    // Refused: signed out, from another site, junk.
+    assert_eq!(handle(&c, &get("/auth/recents", "", Some("forged"))).status, 401);
+    assert_eq!(handle(&c, &post_json("/auth/recents", r#"{"forget":"x"}"#, "forged")).status, 401);
+    let mut cross = post_json("/auth/recents", r#"{"forget":"x"}"#, &ada);
+    cross.headers[0].1 = "https://evil.example".into();
+    assert_eq!(handle(&c, &cross).status, 403);
+    let long = "x".repeat(accounts::recents::MAX_TARGET + 1);
+    for bad in ["nope", "{}", r#"{"open":{"target":"  "}}"#, &format!(r#"{{"forget":"{long}"}}"#), r#"{"open":{"target":"a"},"other":1}"#] {
+        assert_eq!(handle(&c, &post_json("/auth/recents", bad, &ada)).status, 400, "{bad}");
+    }
+    // At most MAX a list.
+    for i in 0..accounts::recents::MAX + 5 {
+        handle(&c, &post_json("/auth/recents", &format!(r#"{{"open":{{"target":"T-{i}"}}}}"#), &ada));
+    }
+    assert_eq!(Accounts::open(dir.path(), true, 21.0).unwrap().recents(&id).len(), accounts::recents::MAX);
 }

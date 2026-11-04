@@ -366,6 +366,14 @@ terms_url = ""                              # shown under the form when set
   are kept on the account (`POST /auth/profile`, shown by `GET /auth/me` under `profile`), and the
   addresses invited in `<data>/accounts/invites.json` (`POST /auth/invite`); with no email set up,
   the app copies the sign-up link for the person to send.
+- **Recent files.** The browser build keeps every file it makes or opens on the page's server and
+  lists it on the account: `GET /auth/recents` answers `{files: [{target, name, kind, opened}]}`,
+  newest first, and `POST /auth/recents` takes `{open: {target, name, kind}}` (put it first) or
+  `{forget: target}` (same-site requests from a signed-in browser only). Each account's list is
+  `<data>/accounts/recents/<account id>.json` (at most 100 files, written atomically, mode 0600).
+  A `target` is the file's join code or link, so it lets whoever has it into the file: it is only
+  ever handed back to its own account. Home ▸ Recently viewed shows the list after a reload and on
+  every computer the account signs in on.
 - **No email yet.** Nothing sends mail: emails aren't verified and there is no reset link. The
   operator resets a password instead.
 

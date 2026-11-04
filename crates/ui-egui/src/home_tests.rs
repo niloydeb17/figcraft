@@ -1062,3 +1062,33 @@ fn the_all_files_filter_keeps_design_files_or_boards() {
     let s = shapes(&mut u);
     assert!(has_text(&s, "Boards"), "the button names the filter");
 }
+
+/// The browser build's account keeps its files on the page's server: Recently viewed lists them
+/// (not the first-run templates) by name, never showing the code or link that opens them, one
+/// open in a tab only once, and a file taken off the list goes.
+#[test]
+fn the_accounts_files_on_the_server_are_recent_cards() {
+    let mut u = first_run();
+    u.app.run(
+        "account.recents",
+        json!({"files": [
+            {"target": "K7M-2QX-9TD", "name": "Landing page", "kind": "design", "opened": 1_800_000_000},
+            {"target": "https://figcraft.example/#file=B0A", "name": "Ideas board", "kind": "board", "opened": 1_700_000_000},
+        ]}),
+    );
+    let s = settle(&mut u);
+    assert!(has_text(&s, "Landing page") && has_text(&s, "Ideas board"), "{:?}", texts(&s));
+    assert!(!texts(&s).iter().any(|(t, ..)| t.contains("K7M-2QX-9TD") || t.contains("#file=")), "a file's code is never shown");
+    assert!(!has_text(&s, "Start from a template"), "not a first run any more");
+    // Open in a tab: the tab's card stands for it (the other "Landing page" up top is the title).
+    u.app.run("file.new", json!({"name": "Landing page"}));
+    let uid = u.app.session.ds().unwrap().uid;
+    u.app.run("account.recentOpened", json!({"target": "K7M-2QX-9TD", "name": "Landing page", "tab": uid}));
+    u.app.ui.home = true;
+    let s = settle(&mut u);
+    assert_eq!(texts(&s).iter().filter(|(t, at, _)| t == "Landing page" && at.y > 200.0).count(), 1, "{:?}", texts(&s));
+    // Taken off the list.
+    u.app.run("account.recentForget", json!({"target": "https://figcraft.example/#file=B0A"}));
+    let s = settle(&mut u);
+    assert!(!has_text(&s, "Ideas board"));
+}

@@ -14,7 +14,7 @@ There is no server-side code and no hand-written JavaScript: the glue is generat
 wasm-bindgen from the Rust sources (`apps/figcraft-web`). Upload the folder's contents anywhere
 that serves static files.
 
-The editor runs entirely on the visitor's device. The web build starts with one new document;
+The editor runs entirely on the visitor's device. The web build opens on Home (Recently viewed); served beside its own `figcraft-server` with sign-in, every file made or opened there is kept on that server and listed on the account;
 there is no desktop TCP control server, and native file dialogs aren't wired up yet. A browser
 with WebGPU or WebGL2 and WebAssembly SIMD is required (any current browser; Safari 16.4 or later).
 

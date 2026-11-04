@@ -1,6 +1,8 @@
 //! The signed-in account in the browser build: asks the page's server who is signed in
 //! (`GET /auth/me`, with the session cookie) when the page opens, and sends what the onboarding
-//! keeps (`POST /auth/profile`, `/auth/invite`) as the engine queues it.
+//! keeps (`POST /auth/profile`, `/auth/invite`) as the engine queues it. Its recent files come
+//! from `GET /auth/recents` once it is signed in, and each file kept or forgotten here goes back
+//! with `POST /auth/recents`, so Home lists them after a reload and on other computers.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,18 +20,32 @@ pub struct Account {
     arrived: Rc<RefCell<Vec<Value>>>,
     /// The picture's bytes, when they arrived since the last frame.
     picture: Rc<RefCell<Option<Vec<u8>>>>,
+    /// The account's recent files (`account.recents` parameters), when they arrived.
+    recents: Rc<RefCell<Option<Value>>>,
 }
 
 impl Account {
     pub fn tick(&mut self, fig: &mut FigApp, ctx: &egui::Context) {
         if !self.asked {
             self.asked = true;
-            let (arrived, picture, ctx) = (self.arrived.clone(), self.picture.clone(), ctx.clone());
+            let (arrived, picture, recents, ctx) = (self.arrived.clone(), self.picture.clone(), self.recents.clone(), ctx.clone());
             spawn_local(async move {
                 let Some((status, body)) = fetch("GET", "/auth/me", None).await else { return };
                 if let Some(p) = crate::account_me::params(status, &body) {
                     arrived.borrow_mut().push(p);
                     ctx.request_repaint();
+                    // Signed in: the files this account made or opened, on any computer.
+                    match fetch("GET", "/auth/recents", None).await {
+                        Some((200, text)) => match serde_json::from_str::<Value>(&text) {
+                            Ok(v) => {
+                                *recents.borrow_mut() = Some(v);
+                                ctx.request_repaint();
+                            }
+                            Err(e) => log::warn!("/auth/recents: not a list: {e}"),
+                        },
+                        Some((status, text)) => log::warn!("/auth/recents: the server answered {status}: {text}"),
+                        None => log::warn!("/auth/recents: the server can't be reached"),
+                    }
                 }
                 // The server keeps Google's picture for the account and hands it over itself.
                 if crate::account_me::has_picture(status, &body)
@@ -47,10 +63,16 @@ impl Account {
         for p in arrived {
             fig.run("account.set", p);
         }
+        // After `account.set` (which starts the list afresh) has run.
+        if let Some(list) = self.recents.borrow_mut().take() {
+            fig.run("account.recents", list);
+        }
         for o in fig.session.account.take_outgoing() {
             let (path, body) = match o {
                 Outgoing::Profile(v) => ("/auth/profile", v),
                 Outgoing::Invite(emails) => ("/auth/invite", serde_json::json!({"emails": emails})),
+                Outgoing::RecentOpened(file) => ("/auth/recents", serde_json::json!({"open": file})),
+                Outgoing::RecentForget(target) => ("/auth/recents", serde_json::json!({"forget": target})),
             };
             spawn_local(async move {
                 match fetch("POST", path, Some(body.to_string())).await {

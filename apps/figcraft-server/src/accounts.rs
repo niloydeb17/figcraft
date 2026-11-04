@@ -7,6 +7,7 @@ pub mod google;
 pub mod http;
 pub mod pages;
 pub mod password;
+pub mod recents;
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -578,6 +579,16 @@ impl Accounts {
         self.invites.extend(clean.iter().map(|e| Invite { by: user.to_string(), email: e.clone(), at: t }));
         write_json(&self.dir.join(INVITES), &self.invites)?;
         Ok(clean)
+    }
+
+    /// `user`'s recent files, newest first ([`recents`]).
+    pub fn recents(&self, user: &str) -> Vec<recents::Recent> {
+        recents::list(&self.dir, user)
+    }
+
+    /// Change `user`'s recent files; the list after.
+    pub fn change_recents(&mut self, user: &str, change: recents::Change) -> Result<Vec<recents::Recent>, String> {
+        recents::apply(&self.dir, user, change)
     }
 
     /// Who `user` has invited.

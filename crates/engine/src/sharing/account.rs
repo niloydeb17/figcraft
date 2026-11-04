@@ -13,6 +13,10 @@ use crate::cmd::CommandSpec;
 use crate::params::{boolean, get, string};
 use crate::{EngineError, Result, Session, bad, spec};
 
+pub mod recents;
+
+pub use recents::RecentFile;
+
 pub const ROLES: &[&str] = &[
     "design",
     "research",
@@ -64,6 +68,11 @@ pub enum Outgoing {
     Profile(Value),
     /// `/auth/invite`: addresses to invite.
     Invite(Vec<String>),
+    /// `/auth/recents {open}`: a file to put first in the account's recent files
+    /// ({target, name, kind}).
+    RecentOpened(Value),
+    /// `/auth/recents {forget}`: a file's target to take off them.
+    RecentForget(String),
 }
 
 /// The account, the local answers and what waits to be sent.
@@ -74,6 +83,8 @@ pub struct AccountState {
     pub profile: Profile,
     /// For the platform to send and clear ([`AccountState::take_outgoing`]).
     pub outbox: Vec<Outgoing>,
+    /// The account's recent files on its server, newest first ([`recents`]).
+    pub recents: Vec<RecentFile>,
 }
 
 impl AccountState {
@@ -164,6 +175,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if !boolean(p, "signedIn").unwrap_or(false) {
         s.account.account = None;
         s.account.outbox.clear();
+        s.account.recents.clear();
         return Ok(account_json(s));
     }
     let email = string(p, "email").and_then(|e| clean_email(&e)).ok_or_else(|| bad(CMD, "a signed-in account has an `email`"))?;
@@ -322,7 +334,7 @@ fn restart(s: &mut Session) -> Value {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut list = vec![
         spec!(
             "account.set",
             "Set the signed-in account",
@@ -359,5 +371,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.request_ui("dialog.tour", json!({}));
             Ok(json!({}))
         }),
-    ]
+    ];
+    list.extend(recents::specs());
+    list
 }

@@ -49,7 +49,10 @@ pub fn start() {
                         log::info!("figcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
-                    let mut session = Session::new();
+                    // Signed in (the page is only served then), the page opens on Home, as Figma's
+                    // file browser does: a file opens from Recently viewed, from the page's address
+                    // (`#file=` / `#join=`), or after a stop, from the copies it kept.
+                    let mut session = Session::empty();
                     // The host names its own server: the default for sharing, codes and the team list.
                     if let Some(server) = page_meta("figcraft-server").as_deref().and_then(crate::query::page_server) {
                         session.prefs.publish_server = server;

@@ -104,3 +104,61 @@ fn signing_out_drops_the_account_and_what_waits() {
     assert!(s.execute("account.set", &json!({"signedIn": true})).is_err(), "a signed-in account has an email");
     assert!(s.execute("help.tour", &json!({})).is_ok());
 }
+
+/// The browser build keeps each file it puts on its server; the account's server gets it, and its
+/// list comes back after a reload with the tabs this app knows still matched.
+#[test]
+fn recent_files_are_kept_queued_and_merged_with_the_servers_list() {
+    let mut s = Session::empty();
+    signed_in(&mut s, true);
+    s.execute("account.recentOpened", &json!({"target": "K7M-2QX-9TD", "name": "Landing", "kind": "design", "tab": 7})).unwrap();
+    s.execute("account.recentOpened", &json!({"target": "B0A-RD1-XYZ", "name": "Ideas", "kind": "board"})).unwrap();
+    let sent = s.account.take_outgoing();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0], Outgoing::RecentOpened(json!({"target": "K7M-2QX-9TD", "name": "Landing", "kind": "design"})));
+    let list = s.execute("account.recents", &json!({})).unwrap();
+    assert_eq!(list["files"][0]["name"], "Ideas", "newest first");
+    assert_eq!(s.account.recent_for_tab(7).map(|r| r.target.as_str()), Some("K7M-2QX-9TD"));
+    // Renamed: the same file moves first under its new name, still in its tab.
+    s.execute("account.recentOpened", &json!({"target": "K7M-2QX-9TD", "name": "Landing v2"})).unwrap();
+    assert_eq!(s.account.recents.len(), 2);
+    assert_eq!(s.account.recents[0].name, "Landing v2");
+    assert_eq!(s.account.recents[0].tab, Some(7));
+    assert_eq!(s.account.take_outgoing().len(), 1, "the rename goes to the server");
+    // The server's list after a reload: an older file it kept, junk skipped, ours kept.
+    let server = json!({"files": [
+        {"target": "OLD-FIL-E00", "name": "Old", "kind": "design", "opened": 10},
+        {"target": "", "name": "junk"},
+        {"target": "bad\u{7}", "name": "junk"},
+        "nope",
+    ]});
+    let list = s.execute("account.recents", &server).unwrap();
+    let names: Vec<&str> = list["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Landing v2", "Ideas", "Old"]);
+    assert_eq!(s.account.recent_for_tab(7).map(|r| r.name.as_str()), Some("Landing v2"));
+    // The two the server didn't have yet go to it.
+    let resent = s.account.take_outgoing();
+    assert_eq!(resent.len(), 2, "{resent:?}");
+    // Forgotten: off the list, and the server is told; forgetting it again sends nothing.
+    s.execute("account.recentForget", &json!({"target": "OLD-FIL-E00"})).unwrap();
+    s.execute("account.recentForget", &json!({"target": "OLD-FIL-E00"})).unwrap();
+    assert_eq!(s.account.take_outgoing(), vec![Outgoing::RecentForget("OLD-FIL-E00".into())]);
+    assert!(s.execute("account.recentOpened", &json!({"target": "  "})).is_err());
+    assert!(s.execute("account.openRecent", &json!({"target": "NOT-THE-RE0"})).is_err(), "only files in the list");
+    // Signing out forgets them.
+    s.execute("account.set", &json!({"signedIn": false})).unwrap();
+    assert!(s.account.recents.is_empty());
+}
+
+/// Signed out, files are still listed for this page but nothing is queued for a server.
+#[test]
+fn recent_files_without_an_account_stay_local() {
+    let mut s = Session::empty();
+    s.execute("account.recentOpened", &json!({"target": "K7M-2QX-9TD", "name": "Landing"})).unwrap();
+    assert_eq!(s.account.recents.len(), 1);
+    assert!(s.account.take_outgoing().is_empty());
+    for i in 0..150 {
+        s.execute("account.recentOpened", &json!({"target": format!("T-{i}"), "name": "x"})).unwrap();
+    }
+    assert_eq!(s.account.recents.len(), crate::account::recents::MAX_RECENTS);
+}

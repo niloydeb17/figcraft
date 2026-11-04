@@ -820,6 +820,18 @@ fn autosaving(app: &FigApp) -> bool {
     app.session.active_read_only() == Some(figcraft_engine::live::PUBLISHING) && app.session.live().quiet
 }
 
+/// The page's automatic save of the active file failed before the file got on the server.
+fn autosave_failed(app: &FigApp) -> bool {
+    let tab = app.session.ds().ok().map(|d| d.uid);
+    app.session.live.iter().any(|l| {
+        l.quiet
+            && l.published.is_none()
+            && matches!(l.status, figcraft_engine::live::Status::Failed { .. })
+            && tab.is_some()
+            && (l.doc_uid == tab || l.tab == tab)
+    })
+}
+
 /// How long "Saved" stays up, in seconds.
 const SAVED_FOR: f64 = 2.5;
 
@@ -833,13 +845,17 @@ fn save_status(app: &FigApp, ui: &Ui, t: &Tokens, saving: bool) {
     let (was_saving, saved_at) = ctx.data(|d| d.get_temp::<(bool, Option<f64>)>(id)).unwrap_or((false, None));
     let saved_at = match (saving, was_saving) {
         (true, _) => None,
-        (false, true) => Some(now),
+        (false, true) if !autosave_failed(app) => Some(now),
+        (false, true) => None,
         (false, false) => saved_at,
     };
     ctx.data_mut(|d| d.insert_temp(id, (saving, saved_at)));
     let label = if saving {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
         tr("Saving…")
+    } else if autosave_failed(app) {
+        // The page tries again by itself (a little later each time).
+        tr("Not saved yet. Trying again…")
     } else if let Some(at) = saved_at.filter(|at| now - at < SAVED_FOR) {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((SAVED_FOR - (now - at)).max(0.05)));
         tr("Saved")

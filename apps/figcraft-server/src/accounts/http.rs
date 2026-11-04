@@ -306,6 +306,16 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             let invited = ctx.accounts().invite(&u.id, &body.emails)?;
             Ok(serde_json::json!({"invited": invited, "link": invite_link(ctx), "emailed": false}))
         }),
+        ("GET", "/auth/recents") => match current(ctx, req) {
+            Some(u) => Response::json(200, &serde_json::json!({"files": ctx.accounts().recents(&u.id)})),
+            None => Response::json(401, &serde_json::json!({"error": "not signed in"})),
+        },
+        ("POST", "/auth/recents") => signed_in_json(ctx, req, |ctx, u| {
+            let change: super::recents::Change =
+                serde_json::from_slice(&req.body).map_err(|_| "give `open` {target, name, kind} or `forget` (a target)".to_string())?;
+            let files = ctx.accounts().change_recents(&u.id, change)?;
+            Ok(serde_json::json!({"files": files}))
+        }),
         ("GET", "/auth/avatar") => match current(ctx, req) {
             Some(u) => avatar(ctx, &u),
             None => Response { status: 401, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() },
@@ -313,9 +323,10 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
         ("GET", "/auth/google") => google_start(ctx, req),
         ("GET", "/auth/google/callback") => google_back(ctx, req),
         ("POST", "/auth/admin") => admin(ctx, req),
-        (_, "/login" | "/logout" | "/auth/me" | "/auth/avatar" | "/auth/check" | "/auth/admin" | "/auth/profile" | "/auth/invite") => {
-            Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site))
-        }
+        (
+            _,
+            "/login" | "/logout" | "/auth/me" | "/auth/avatar" | "/auth/check" | "/auth/admin" | "/auth/profile" | "/auth/invite" | "/auth/recents",
+        ) => Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site)),
         _ => Response::html(404, pages::message("Page not found", "There's nothing at this address.", &ctx.settings.site)),
     }
 }
