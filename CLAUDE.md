@@ -101,7 +101,10 @@ to `main`.
   (see `docs/mcp.md`).
 - Shell gotcha on the owner's machine: `mv`/`cp` may be aliased interactive — use `/bin/mv -f`.
 - Parallel agents: separate `CARGO_TARGET_DIR` per agent, edit only the crates/files you own,
-  write manifests atomically, delete your target dir when done (disk is limited).
+  write manifests atomically, delete your target dir when done (disk is limited). A debug build is
+  9-27 GB; `cargo xtask clean-caches` (`--dry-run` to preview) removes idle `/tmp/fc-*target*` and
+  `/tmp/figcraft-*target*` dirs and `target/debug/incremental`. Run it at the start of a session
+  when `df -h` shows under 40 GB free.
 
 ## Roadmap
 Progress docs: [`ROADMAP.md`](ROADMAP.md) (one-page

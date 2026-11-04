@@ -16,9 +16,12 @@
 //! - `plugins` format-check, lint, test and build the plugin SDK and example plugins (`plugins/`, a
 //!   workspace of its own) for wasm32: `<target>/plugins/dist/<example>/` holds each manifest and
 //!   module, ready for Plugins ▸ Development ▸ Import plugin from manifest…
+//! - `clean-caches` delete idle agent target dirs in the temp dirs and `target/debug/incremental`
+//!   (`--dry-run` lists only; `--hours N` sets how long a dir must be idle, default 6)
 //! - `bench`   release-build timings at 1k/10k/50k layers (`bench 1000,10000` for other sizes) and
 //!   with a synthetic design system used by 2,000 instances
 
+mod clean;
 mod docs_check;
 mod icon;
 mod layers;
@@ -53,9 +56,12 @@ fn main() -> ExitCode {
         "icon" => icon::generate(&root()),
         "wasm" => wasm(),
         "plugins" => plugins(),
+        "clean-caches" => clean::clean(&root(), args.get(1..).unwrap_or_default()),
         "bench" => bench(args.get(1).map_or("1000,10000,50000", String::as_str)),
         _ => {
-            eprintln!("tasks: ci, test, i18n-report, layers, assets, docs, parity, version [set X.Y.Z], icon, wasm, plugins, bench [SIZES]");
+            eprintln!(
+                "tasks: ci, test, i18n-report, layers, assets, docs, parity, version [set X.Y.Z], icon, wasm, plugins, clean-caches [--dry-run] [--hours N], bench [SIZES]"
+            );
             task == "help"
         }
     };
