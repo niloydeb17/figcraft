@@ -23,6 +23,8 @@ pub struct Cloud {
     still: Option<(u64, u64, f64)>,
     /// The page opened a file from its address: the first file joined keeps that address.
     adopt: bool,
+    /// Home must stop naming the editor file, without erasing a startup deep link mid-join.
+    navigation: crate::navigation::Navigation,
 }
 
 impl Cloud {
@@ -81,12 +83,19 @@ impl Cloud {
     /// Point the page's address at the open file once it is on a server.
     fn follow_address(&mut self, fig: &FigApp) {
         let s = &fig.session;
-        if fig.ui.home {
+        let Some(window) = web_sys::window() else { return };
+        let current = window.location().hash().unwrap_or_default();
+        // With no files the UI also shows Home, even when the explicit Home toggle is false.
+        let home = fig.ui.home || !fig.has_files();
+        if let Some(fragment) = self.navigation.follow(home, &current)
+            && let Err(e) = window.location().set_hash(fragment)
+        {
+            log::warn!("couldn't return to Home in the address: {e:?}");
+        }
+        if home {
             return;
         }
         let Some(uid) = s.docs.get(s.active).map(|d| d.uid) else { return };
-        let Some(window) = web_sys::window() else { return };
-        let current = window.location().hash().unwrap_or_default();
         let wanted = match self.named.get(&uid) {
             Some(w) => w.clone(),
             None => {

@@ -42,6 +42,10 @@ mod cloud;
 mod kept;
 #[cfg(target_arch = "wasm32")]
 mod local_fonts;
+#[cfg(any(target_arch = "wasm32", test))]
+mod navigation;
+#[cfg(test)]
+mod navigation_tests;
 #[cfg(target_arch = "wasm32")]
 mod pasted;
 #[cfg(any(target_arch = "wasm32", test))]
