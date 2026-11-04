@@ -4,7 +4,7 @@
 //! started card (closed, kept closed, and brought back from the Help menu).
 
 use egui::accesskit::Role;
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Shape};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Shape};
 use figcraft_engine::Session;
 use figcraft_engine::online::OnlineFile;
 use figcraft_engine::templates::TEMPLATES;
@@ -401,43 +401,61 @@ fn a_first_run_offers_templates_on_recents_and_recent_files_replace_them() {
     let s = settle(&mut u);
     assert!(has_text(&s, "Recently viewed") && has_text(&s, "ridgeline"));
     assert!(!has_text(&s, "Start from a template") && !has_text(&s, "See all templates"));
-    assert!(has_text(&s, "Open files"), "the document opened from the template is listed");
+    assert!(!has_text(&s, "Open files"), "there is no list of open files apart from the recent ones");
+    assert!(has_text(&s, "Landing page"), "the document opened from the template is listed with them");
 }
 
 #[test]
-fn an_open_files_long_name_and_path_share_their_row_without_overlapping() {
-    let name = "Quarterly planning: onboarding flow review with annotations and handoff notes";
-    let long = "/Users/alex/Documents/Clients/Northwind Traders/2026 Website relaunch/Design reviews/Week 42/onboarding-flow-review.figcraft";
+fn open_files_are_recent_cards_with_a_picture_of_the_file_as_it_is() {
     let short = "/tmp/wireframes.figcraft";
     let mut s = Session::new();
-    s.execute("file.rename", &json!({"name": name})).unwrap();
-    s.docs[0].path = Some(long.into());
-    s.execute("file.new", &json!({"name": "Wireframes"})).unwrap();
-    s.docs[1].path = Some(short.into());
+    s.execute("file.rename", &json!({"name": "Wireframes"})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 320, "height": 200})).unwrap();
+    s.docs[0].path = Some(short.into());
+    s.execute("file.new", &json!({"name": "Blank"})).unwrap();
     let mut u = Ui::new(s);
     u.app.ui.home = true;
     u.app.session.prefs.getting_started_dismissed = true;
     let s = settle(&mut u);
-    assert!(has_text(&s, "Open files"));
-    // A row that fits shows its name and path in full.
-    assert!(has_text(&s, "Wireframes") && has_text(&s, short));
-    // One that doesn't: the name, then the end of its path, side by side.
+    assert!(!has_text(&s, "Open files") && has_text(&s, "Recently viewed"));
+    // A card shows the name (and "Open" for a file that is not saved anywhere yet).
+    assert!(has_text(&s, "Wireframes"), "{:?}", texts(&s));
+    assert!(has_text(&s, "Blank") && has_text(&s, "Open"));
+    // The file with a frame in it has its picture, drawn from its content now; the empty one
+    // keeps the placeholder.
+    assert_eq!(crate::home::open_pictures(&u.ctx), 1);
+    // Choosing a card shows that tab.
     let all = texts(&s);
-    let rect = |(_, p, size): &(String, Pos2, egui::Vec2)| Rect::from_min_size(*p, *size);
-    let detail = all.iter().find(|(t, _, _)| t.ends_with("/onboarding-flow-review.figcraft")).expect("the path");
-    let detail_rect = rect(detail);
-    let shown_name =
-        all.iter().find(|e| e.0.starts_with('Q') && (rect(e).center().y - detail_rect.center().y).abs() < 2.0).expect("the name on the path's row");
-    let name_rect = rect(shown_name);
-    assert!(shown_name.0.starts_with("Quarterly planning: onboarding") && shown_name.0.ends_with('…'), "{:?}", shown_name.0);
-    assert!(name_rect.max.x + 12.0 <= detail_rect.min.x, "{:?} {name_rect:?} overlaps {:?} {detail_rect:?}", shown_name.0, detail.0);
-    assert!(detail.0.starts_with('…') && long.ends_with(detail.0.trim_start_matches('…')), "{:?}", detail.0);
-    // Hovered, the row shows them in full.
-    u.frame(vec![Event::PointerMoved(name_rect.center())]);
-    for _ in 0..60 {
-        u.frame(vec![]);
-    }
-    assert!(texts(&shapes(&mut u)).iter().any(|(t, _, _)| t.contains(long)), "no tooltip with the full path");
+    let at = all.iter().find(|(t, _, _)| t == "Blank").map(|(_, p, size)| *p + *size / 2.0).expect("the Blank card");
+    // (A click selects a card, a double-click opens it, as with every recent file.)
+    click(&mut u, at);
+    click(&mut u, at);
+    assert!(!u.app.ui.home);
+    assert_eq!(u.app.session.doc().unwrap().name, "Blank");
+}
+
+/// How many files the Recently viewed list has (`ui.inspect` doesn't list the unsaved ones).
+fn app_cards(u: &Ui) -> usize {
+    crate::home::open_list(&u.app).len()
+}
+
+#[test]
+fn tabs_that_show_one_file_are_one_card() {
+    let mut s = Session::new();
+    s.docs[0].path = Some("/tmp/one.figcraft".into());
+    s.execute("file.new", &json!({})).unwrap();
+    s.docs[1].path = Some("/tmp/one.figcraft".into());
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("file.new", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.home = true;
+    u.app.session.prefs.getting_started_dismissed = true;
+    let s = settle(&mut u);
+    let named = |n: &str| texts(&s).iter().filter(|(t, _, _)| t == n).count();
+    // Four tabs: two on one path, two nowhere. The tab bar draws "Untitled" once per tab, so count
+    // the cards by their detail line: the unsaved ones say "Open".
+    assert_eq!(named("Open"), 2, "two unsaved files, two cards");
+    assert_eq!(app_cards(&u), 3, "the two tabs on one path are one card");
 }
 
 #[test]

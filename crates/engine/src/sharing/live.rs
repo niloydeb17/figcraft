@@ -124,6 +124,10 @@ pub struct Live {
     pub published: Option<Published>,
     /// The session was started by sharing with a join code (`collab.share`): how, and its codes.
     pub share: Option<Share>,
+    /// The upload was an automatic save (`collab.share {quiet: true}`, the web page keeping the
+    /// open file on its server): the UI says "Saving…" and "Saved" instead of swapping its toolbar
+    /// for the view-only one while the file is on its way.
+    pub quiet: bool,
     /// What the server of the file you're in says about its hosting (operator, terms, expiry);
     /// a server that says it takes reports (`collab.report`).
     pub hosting: Option<HostInfo>,

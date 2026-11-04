@@ -83,6 +83,39 @@ fn the_publish_dialog() {
     assert_eq!(crate::live::inspect(&h.app)["readOnly"], figcraft_engine::live::PUBLISHING);
 }
 
+#[test]
+fn the_pages_automatic_save_keeps_the_toolbar_and_says_saving() {
+    let (mut h, _) = Harness::new();
+    h.app.session.prefs.publish_server = "ws://127.0.0.1:47900/?key=KeyKeyKeyKeyKeyKeyKey0".into();
+    // Not asked for by the person: the file goes up, and the toolbar stays.
+    h.app.run("collab.share", json!({"quiet": true}));
+    let shapes = h.frames(3);
+    assert_eq!(h.app.session.live().status, Status::Connecting);
+    assert!(h.app.session.live().quiet);
+    assert_eq!(crate::live::inspect(&h.app)["readOnly"], figcraft_engine::live::PUBLISHING, "edits still wait for the upload");
+    assert!(has_text(&shapes, "Saving…"));
+    assert!(!has_text(&shapes, "Publishing…"), "no view-only pill for the page's own save");
+    // Once the file is on the server the status says "Saved", for a moment.
+    h.send(vec![LiveEvent::Welcome {
+        info: SessionInfo {
+            role: Role::Host,
+            me: 1,
+            name: "Ada".into(),
+            color: "#14AE5C".into(),
+            file_name: String::new(),
+            pages: vec![],
+            link: String::new(),
+            url: String::new(),
+            address: "127.0.0.1:47900".into(),
+            network: false,
+            access: Access::Edit,
+        },
+        peers: vec![],
+    }]);
+    let shapes = h.frames(3);
+    assert!(!has_text(&shapes, "Publishing…"));
+}
+
 fn hosting(expires: Option<u64>) -> HostInfo {
     HostInfo {
         open: true,

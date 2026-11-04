@@ -76,7 +76,7 @@ impl Cloud {
         }
         self.sent.insert(uid);
         self.still = None;
-        fig.run("collab.share", json!({}));
+        fig.run("collab.share", json!({"quiet": true}));
         false
     }
 

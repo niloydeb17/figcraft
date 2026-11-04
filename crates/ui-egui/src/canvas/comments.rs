@@ -313,6 +313,15 @@ fn avatar(painter: &egui::Painter, center: Pos2, r: f32, name: &str) {
     crate::live::avatar(painter, center, r, name, author_color(name));
 }
 
+/// The avatar of `name`: your account's picture when they are you (`me`), else initials.
+fn avatar_of(painter: &egui::Painter, center: Pos2, r: f32, name: &str, me: &str) {
+    if !me.is_empty() && name == me {
+        crate::live::avatar_me(painter, center, r, name, author_color(name));
+    } else {
+        avatar(painter, center, r, name);
+    }
+}
+
 /// Seconds since `t` (Unix seconds); `None` for unknown or future times.
 fn age(t: u64) -> Option<u64> {
     let now = cc::now_secs();
@@ -670,7 +679,7 @@ fn message(
     let block = ui.scope(|ui| {
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
-            avatar(ui.painter(), r.center(), 12.0, &m.author);
+            avatar_of(ui.painter(), r.center(), 12.0, &m.author, cx.me);
             ui.add_space(4.0);
             author_name(ui, &t, m);
             let when = if m.edited > 0 { trf("{when} · edited", &[("when", &ago(m.created))]) } else { ago(m.created) };
@@ -1156,7 +1165,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
         if unread {
             ui.painter().circle_filled(pos2(r.min.x + 8.0, r.min.y + 22.0), 3.5, ACCENT);
         }
-        avatar(ui.painter(), pos2(r.min.x + 28.0, r.min.y + 22.0), 12.0, &c.first.author);
+        avatar_of(ui.painter(), pos2(r.min.x + 28.0, r.min.y + 22.0), 12.0, &c.first.author, &me);
         let name_font = if unread { semibold(12.0) } else { regular(12.0) };
         ui.painter().text(pos2(r.min.x + 48.0, r.min.y + 22.0), Align2::LEFT_CENTER, &c.first.author, name_font, t.text);
         ui.painter().text(pos2(r.max.x - 16.0, r.min.y + 22.0), Align2::RIGHT_CENTER, ago(c.last_activity()), regular(11.0), t.text_tertiary);

@@ -473,8 +473,7 @@ fn file_matches(name: &str, location: &str, query: &str) -> bool {
 /// server; online files are opened through their existing owner-token command only on click.
 fn search_results(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let query = app.ui.home_view.file_query.trim().to_lowercase();
-    let mut count = open_files(app, ui, t, &query);
-    count += crate::home_recents::section(app, ui, t, &query);
+    let mut count = crate::home_recents::section(app, ui, t, &query);
 
     let online: Vec<_> = app.session.prefs.online_files.iter().filter(|f| file_matches(&f.name, &f.server, &query)).cloned().collect();
     let mut open_online = None;
@@ -535,8 +534,7 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
 }
 
 fn recents_body(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
-    open_files(app, ui, t, "");
-    if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() {
+    if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() && app.session.docs.is_empty() {
         // A first run: nothing to reopen yet, so offer something to start from.
         crate::home_recents::first_run_row(app, ui, t);
         if template_header(ui, t, tr("Start from a template"), tr("See all templates")) {
@@ -565,35 +563,89 @@ fn template_header(ui: &mut Ui, t: &Tokens, label: &str, action: &str) -> bool {
     resp.clicked()
 }
 
-/// The Open files list: the documents whose name or path has `query` (lower case; all for ""), a
-/// row each; choosing one shows its tab. How many are listed.
-fn open_files(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize {
-    let hit = |d: &&figcraft_engine::DocState| file_matches(&d.doc.name, d.path.as_deref().unwrap_or_default(), query);
-    let count = app.session.docs.iter().filter(hit).count();
-    if count == 0 {
-        return 0;
+/// An open file for the Recently viewed list: the tab that shows it.
+pub(crate) struct OpenFile {
+    /// The tab's place in `Session::docs`, and its `DocState::uid`.
+    pub index: usize,
+    pub uid: u64,
+    pub name: String,
+    pub kind: figcraft_doc::FileKind,
+    /// Where it is on disk, if it is.
+    pub path: Option<String>,
+}
+
+/// What names the file a tab shows: its path; else the file on the server it is kept in or
+/// joined; else only the tab itself. Tabs with one key are one file.
+fn open_key(app: &FigApp, d: &figcraft_engine::DocState) -> String {
+    if let Some(path) = d.path.as_deref().filter(|p| !p.is_empty()) {
+        return format!("path:{path}");
     }
-    subheading(ui, t, tr("Open files"));
-    let mut switch = None;
-    for (i, d) in app.session.docs.iter().enumerate().filter(|(_, d)| hit(d)) {
-        let detail = d.path.as_deref().unwrap_or_default();
-        let row = FileRow {
-            mark: Some((icons::file_mark(d.doc.kind), ACCENT)),
-            name: &d.doc.name,
-            ink: t.text,
-            detail,
-            detail_size: 11.0,
-            detail_ink: t.text_secondary,
-        };
-        if listed(ui, t, ui.scope_id().with(("open", d.uid)), 36.0, &row) {
-            switch = Some(i);
+    if let Some(live) = app.session.live.iter().find(|l| l.doc_uid == Some(d.uid)) {
+        if let Some(p) = live.published.as_ref() {
+            return format!("server:{}/{}", p.server, p.file);
+        }
+        if let Some(info) = live.info.as_ref().filter(|i| !i.link.is_empty()) {
+            return format!("link:{}", info.link);
         }
     }
-    if let Some(i) = switch {
-        app.run("doc.switch", json!({"index": i}));
-        app.ui.home = false;
+    format!("tab:{}", d.uid)
+}
+
+/// The open files, each once: tabs that show one file are merged into the one you are in (else
+/// the one edited most).
+pub(crate) fn open_list(app: &FigApp) -> Vec<OpenFile> {
+    let mut list: Vec<(String, OpenFile)> = Vec::new();
+    for (index, d) in app.session.docs.iter().enumerate() {
+        let key = open_key(app, d);
+        let file = OpenFile { index, uid: d.uid, name: d.doc.name.clone(), kind: d.doc.kind, path: d.path.clone().filter(|p| !p.is_empty()) };
+        match list.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, kept)) => {
+                let better = index == app.session.active
+                    || (kept.index != app.session.active && d.revision > app.session.docs.get(kept.index).map_or(0, |k| k.revision));
+                if better {
+                    *kept = file;
+                }
+            }
+            None => list.push((key, file)),
+        }
     }
-    count
+    list.into_iter().map(|(_, f)| f).collect()
+}
+
+/// The pictures of the open files `uids` as they are now, by tab: drawn again when a file changes
+/// (one new picture a frame, so the screen keeps moving), `None` for one with nothing to show.
+pub(crate) fn tab_pictures(ctx: &egui::Context, docs: &[figcraft_engine::DocState], uids: &[u64]) -> BTreeMap<u64, Option<Thumb>> {
+    let dark = ctx.global_style().visuals.dark_mode;
+    let mut cache: OpenThumbs = ctx.data(|d| d.get_temp(Id::unique("open_file_thumbs"))).unwrap_or_default();
+    // A file closed is forgotten.
+    cache.0.retain(|uid, _| uids.contains(uid));
+    let mut rendered = false;
+    for d in docs.iter().filter(|d| uids.contains(&d.uid)) {
+        let fresh = cache.0.get(&d.uid).is_some_and(|(revision, was_dark, _)| *revision == d.revision && *was_dark == dark);
+        if fresh {
+            continue;
+        }
+        if rendered {
+            ctx.request_repaint();
+        } else {
+            cache.0.insert(d.uid, (d.revision, dark, thumbnail_of(ctx, &d.doc, &format!("open-file-{}", d.uid))));
+            rendered = true;
+        }
+    }
+    let pictures = cache.0.iter().map(|(uid, (_, _, thumb))| (*uid, thumb.clone())).collect();
+    ctx.data_mut(|d| d.insert_temp(Id::unique("open_file_thumbs"), cache));
+    pictures
+}
+
+/// A picture on its page colour, as large as fits `area`.
+fn paint_thumb(p: &egui::Painter, area: Rect, top: CornerRadius, thumb: &Thumb) {
+    p.rect_filled(area, top, thumb.page);
+    let Some(texture) = &thumb.texture else { return };
+    let size = texture.size_vec2();
+    let inner = area.shrink(area.height() * 0.05);
+    let fit = (inner.width() / size.x.max(1.0)).min(inner.height() / size.y.max(1.0));
+    let image = Rect::from_center_size(inner.center(), size * fit);
+    p.image(texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
 /// The file joined from the home screen (a code, or one of your online files) opened in a tab of
@@ -698,14 +750,7 @@ fn template_card(ui: &mut Ui, t: &Tokens, rect: Rect, picture_h: f32, template: 
     let area = Rect::from_min_size(rect.min, vec2(rect.width(), picture_h)).shrink(1.0);
     let top = CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 };
     match thumb {
-        Some(thumb) => {
-            p.rect_filled(area, top, thumb.page);
-            let size = thumb.texture.size_vec2();
-            let inner = area.shrink(area.height() * 0.05);
-            let fit = (inner.width() / size.x.max(1.0)).min(inner.height() / size.y.max(1.0));
-            let image = Rect::from_center_size(inner.center(), size * fit);
-            p.image(thumb.texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        }
+        Some(thumb) => paint_thumb(p, area, top, thumb),
         None => {
             p.rect_filled(area, top, t.field);
             icons::paint(p, Rect::from_center_size(area.center(), vec2(20.0, 20.0)), Icon::Frame, t.icon_secondary);
@@ -728,9 +773,10 @@ fn template_card(ui: &mut Ui, t: &Tokens, rect: Rect, picture_h: f32, template: 
 
 /// A template's picture: its first page's frames, and the page colour they sit on.
 #[derive(Clone)]
-struct Thumb {
-    texture: egui::TextureHandle,
-    page: Color32,
+pub(crate) struct Thumb {
+    /// What is on the page (`None`: nothing: an empty file is its page colour alone).
+    pub texture: Option<egui::TextureHandle>,
+    pub page: Color32,
 }
 
 /// Pictures by template and theme (the page colour follows the theme); `None`: nothing to show.
@@ -740,24 +786,51 @@ struct Thumbs(BTreeMap<(&'static str, bool), Option<Thumb>>);
 /// Build `template` and render the top of its first page to fit a card.
 fn thumbnail(ctx: &egui::Context, template: &Template, background: figcraft_color::Color) -> Option<Thumb> {
     let doc = template.build(background).ok()?;
-    let frames = doc.node(doc.first_page()?)?.children.clone();
-    let bounds = frames.iter().filter_map(|id| figcraft_render::export_bounds(&doc, *id)).reduce(|a, b| a.union(b))?;
+    thumbnail_of(ctx, &doc, &format!("template-thumb-{}", template.id))
+}
+
+/// Render the top of `doc`'s first page to fit a card, on that page's colour. A file with nothing
+/// on its page is that colour alone; `None` only for a file with no page.
+fn thumbnail_of(ctx: &egui::Context, doc: &figcraft_doc::Document, name: &str) -> Option<Thumb> {
+    let page = doc.first_page()?;
+    let background = match doc.node(page).map(|n| &n.kind) {
+        Some(figcraft_doc::NodeKind::Page { background, .. }) => *background,
+        _ => return None,
+    };
+    let empty = Thumb { texture: None, page: crate::theme::c32(background) };
+    let frames = doc.node(page)?.children.clone();
+    let Some(bounds) = frames.iter().filter_map(|id| figcraft_render::export_bounds(doc, *id)).reduce(|a, b| a.union(b)) else {
+        return Some(empty);
+    };
     if !(bounds.width() > 0.0 && bounds.height() > 0.0) {
-        return None;
+        return Some(empty);
     }
     // A page much taller than a card shows its top, as wide as the card.
     let (w, h) = (f64::from(CARD_MAX - 20.0), f64::from((CARD_MAX * 9.0 / 16.0).round() - 20.0));
     let area = figcraft_geom::Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1.min(bounds.y0 + bounds.width() * h / w * 1.5));
-    let scale = (w / area.width()).min(h / area.height()) * f64::from(ctx.pixels_per_point());
-    let pix = figcraft_render::render_area(&doc, &frames, area, scale.min(1.0))?;
+    // As sharp as the card on this screen: small files are drawn larger, not left at one pixel
+    // to a point and stretched.
+    let scale = ((w / area.width()).min(h / area.height()) * f64::from(ctx.pixels_per_point())).min(8.0);
+    let Some(pix) = figcraft_render::render_area(doc, &frames, area, scale) else { return Some(empty) };
     let image = crate::render_worker::screen_image(&pix, doc.color_profile);
-    let texture = ctx.load_texture(format!("template-thumb-{}", template.id), image, egui::TextureOptions::LINEAR);
-    Some(Thumb { texture, page: crate::theme::c32(background) })
+    let texture = ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
+    Some(Thumb { texture: Some(texture), page: empty.page })
 }
+
+/// The open files' pictures by tab: the revision and theme each was drawn for.
+#[derive(Clone, Default)]
+struct OpenThumbs(BTreeMap<u64, (u64, bool, Option<Thumb>)>);
 
 /// Tests: the templates whose pictures are cached for the light or dark theme.
 #[cfg(test)]
 pub(crate) fn cached_thumbnails(ctx: &egui::Context, dark: bool) -> Vec<&'static str> {
     let thumbs: Thumbs = ctx.data(|d| d.get_temp(Id::unique("template_thumbs"))).unwrap_or_default();
     thumbs.0.iter().filter(|((_, d), thumb)| *d == dark && thumb.is_some()).map(|((id, _), _)| *id).collect()
+}
+
+/// Tests: how many open files have something drawn on their picture.
+#[cfg(test)]
+pub(crate) fn open_pictures(ctx: &egui::Context) -> usize {
+    let thumbs: OpenThumbs = ctx.data(|d| d.get_temp(Id::unique("open_file_thumbs"))).unwrap_or_default();
+    thumbs.0.values().filter(|(_, _, thumb)| thumb.as_ref().is_some_and(|t| t.texture.is_some())).count()
 }

@@ -254,14 +254,29 @@ pub struct Shown {
     pub stat: Option<Stat>,
     /// A design file or a board (design until its picture has been read).
     pub kind: figcraft_doc::FileKind,
+    /// The file is open in a tab.
+    pub open: Option<OpenTab>,
 }
+
+/// The tab an open file is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenTab {
+    /// The tab's `DocState::uid`, and its place in `Session::docs`.
+    pub uid: u64,
+    pub index: usize,
+    /// The file is on disk (it has a path); an open file that isn't is shown by its tab alone.
+    pub saved: bool,
+}
+
+/// What stands in for the path of an open file that has none.
+const TAB: &str = "tab:";
 
 impl Shown {
     fn new(path: &str, stat: Option<Stat>) -> Shown {
         // Shown without its extension, like a document's name; the full path is the tooltip.
         let p = Path::new(path);
         let name = p.file_stem().or_else(|| p.file_name()).map_or_else(|| path.to_string(), |f| f.to_string_lossy().into_owned());
-        Shown { path: path.to_string(), name, stat, kind: figcraft_doc::FileKind::Design }
+        Shown { path: path.to_string(), name, stat, kind: figcraft_doc::FileKind::Design, open: None }
     }
 
     fn date(&self, key: SortKey) -> Option<u64> {
@@ -275,6 +290,9 @@ impl Shown {
 
     /// The line under the name: "Edited 3 hours ago", "File not found", nothing yet.
     fn detail(&self, now: u64) -> String {
+        if self.open.is_some_and(|o| !o.saved) {
+            return tr("Open").into();
+        }
         match self.stat {
             Some(Stat { exists: false, .. }) => tr("File not found").into(),
             Some(Stat { modified: Some(m), .. }) => edited(now, m),
@@ -489,7 +507,7 @@ impl Recents {
             }
         }
         self.files.retain(|p, _| paths.contains(p));
-        if self.selected.as_ref().is_some_and(|s| !paths.contains(s)) {
+        if self.selected.as_ref().is_some_and(|s| !paths.contains(s) && !s.starts_with(TAB)) {
             self.selected = None;
         }
         for p in paths {
@@ -575,6 +593,8 @@ pub fn inspect(app: &FigApp) -> Value {
 /// What the user asked for on the recent files this frame.
 enum Action {
     Open(String),
+    /// Show the tab of an open file (its place in `Session::docs`).
+    Switch(usize),
     Reveal(String),
     Remove(String),
     Sort(Sort),
@@ -590,27 +610,57 @@ enum Tab {
     SharedFolders,
 }
 
-/// The Recent files heading, its toolbar and the files as cards or a table. With a `query` (lower
-/// case, from the Home search) only the files not open whose path has it, from every recent file;
-/// nothing at all when none has it. How many files are shown.
+/// The Recent files heading, its toolbar and the files as cards or a table: the files open in a
+/// tab and the recent ones, each file once. With a `query` (lower case, from the Home search) only
+/// the files whose name or path has it, from every recent file; nothing at all when none has it.
+/// How many files are shown.
 pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize {
     let searching = !query.is_empty();
+    let open = crate::home::open_list(app);
     // A search reaches every recent file; the files shown without one stay known through it.
-    let paths: Vec<String> = listed(&app.session.prefs.recent_files).take(if searching { usize::MAX } else { SHOWN }).cloned().collect();
+    let mut paths: Vec<String> = listed(&app.session.prefs.recent_files).take(if searching { usize::MAX } else { SHOWN }).cloned().collect();
+    for o in &open {
+        if let Some(path) = &o.path
+            && !paths.contains(path)
+        {
+            paths.push(path.clone());
+        }
+    }
     let time = ui.input(|i| i.time);
     let now = figcraft_engine::cmd::comment::now_secs();
     let reduce_motion = app.reduce_motion();
     let (view, sort) = (View::of(&app.session.prefs), Sort::of(&app.session.prefs));
+    let uids: Vec<u64> = open.iter().map(|o| o.uid).collect();
+    let pictures = crate::home::tab_pictures(ui.ctx(), &app.session.docs, &uids);
     let state = &mut app.ui.home_view.recents;
     state.refresh(ui.ctx(), &paths, time);
-    let mut files = sorted(state.shown(&paths), sort);
+    let mut files = state.shown(&paths);
+    // A recent file that is open is shown as the open file it is; an open file with no path has
+    // only its tab to go by.
+    for o in &open {
+        let tab = OpenTab { uid: o.uid, index: o.index, saved: o.path.is_some() };
+        match o.path.as_ref().and_then(|p| files.iter_mut().find(|f| f.path == *p)) {
+            Some(f) => {
+                // It is open: it's there, whatever the disk says (it may be saved elsewhere next).
+                f.stat = Some(Stat { exists: true, ..f.stat.unwrap_or_default() });
+                f.open = Some(tab);
+                f.name = o.name.clone();
+            }
+            None => {
+                let stat = Stat { exists: true, modified: Some(now), created: None };
+                let mut f = Shown::new(&format!("{TAB}{}", o.uid), Some(stat));
+                (f.name, f.kind, f.open) = (o.name.clone(), o.kind, Some(tab));
+                files.push(f);
+            }
+        }
+    }
+    let mut files = sorted(files, sort);
     let filter = app.ui.home_view.files_filter;
     if let Some(kind) = filter {
         files.retain(|f| f.kind == kind);
     }
     if searching {
-        let docs = &app.session.docs;
-        files.retain(|f| f.path.to_lowercase().contains(query) && !docs.iter().any(|d| d.path.as_deref() == Some(f.path.as_str())));
+        files.retain(|f| f.name.to_lowercase().contains(query) || (f.open.is_none_or(|o| o.saved) && f.path.to_lowercase().contains(query)));
         if files.is_empty() {
             return 0;
         }
@@ -618,7 +668,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
     let with_created = files.iter().any(|f| f.stat.is_some_and(|s| s.created.is_some()));
     let mut action = toolbar(ui, t, view, sort, with_created, filter, true);
     let chosen = match view {
-        View::Grid => grid(ui, t, state, &files, now, time, reduce_motion),
+        View::Grid => grid(ui, t, state, &files, &pictures, now, time, reduce_motion),
         View::List => list(ui, t, state, &files, now, sort, with_created),
     };
     action = action.or(chosen);
@@ -631,6 +681,11 @@ fn apply(app: &mut FigApp, action: Option<Action>) {
     match action {
         Some(Action::Open(path)) => {
             if app.run_user("file.open", json!({"path": path})).is_some() {
+                app.ui.home = false;
+            }
+        }
+        Some(Action::Switch(index)) => {
+            if app.run("doc.switch", json!({"index": index})).is_some() {
                 app.ui.home = false;
             }
         }
@@ -816,25 +871,30 @@ fn interact(ui: &Ui, resp: &Response, recents: &mut Recents, file: &Shown) -> Op
     }
     let enter = resp.has_focus() && ui.input(|i| i.key_pressed(Key::Enter));
     // A click soon after another counts as a triple: it opens too.
+    let open = |file: &Shown| file.open.map_or_else(|| Action::Open(file.path.clone()), |o| Action::Switch(o.index));
     if resp.double_clicked() || resp.triple_clicked() || enter {
-        action = Some(Action::Open(file.path.clone()));
+        action = Some(open(file));
     } else if resp.clicked() || resp.secondary_clicked() {
         recents.selected = Some(file.path.clone());
         resp.request_focus();
     }
     crate::right::context_popup(resp).show(|ui| {
         if crate::right::menu_item(ui, tr("Open"), "") {
-            action = Some(Action::Open(file.path.clone()));
+            action = Some(open(file));
             ui.close();
         }
-        if cfg!(not(target_arch = "wasm32")) && file.stat.is_some_and(|s| s.exists) && crate::right::menu_item(ui, reveal_label(), "") {
+        let on_disk = file.open.is_none_or(|o| o.saved);
+        if cfg!(not(target_arch = "wasm32")) && on_disk && file.stat.is_some_and(|s| s.exists) && crate::right::menu_item(ui, reveal_label(), "") {
             action = Some(Action::Reveal(file.path.clone()));
             ui.close();
         }
-        ui.separator();
-        if crate::right::menu_item(ui, tr("Remove from recents"), "") {
-            action = Some(Action::Remove(file.path.clone()));
-            ui.close();
+        // A file that is open stays in the list until it is closed.
+        if file.open.is_none() {
+            ui.separator();
+            if crate::right::menu_item(ui, tr("Remove from recents"), "") {
+                action = Some(Action::Remove(file.path.clone()));
+                ui.close();
+            }
         }
     });
     action
@@ -876,7 +936,9 @@ fn arrows(ui: &Ui, recents: &mut Recents, files: &[Shown], across: usize, down: 
 /// The square file-type mark before a name (a design file's pen nib, a board's note).
 fn file_icon(ui: &Ui, t: &Tokens, center: egui::Pos2, file: &Shown) {
     let r = Rect::from_center_size(center, vec2(16.0, 16.0));
-    match FileKind::of(Path::new(&file.path)) {
+    // An open file is a document of the app, whatever it is saved as.
+    let kind = if file.open.is_some() { FileKind::FigCraft } else { FileKind::of(Path::new(&file.path)) };
+    match kind {
         FileKind::FigCraft | FileKind::Fig | FileKind::Sketch => {
             ui.painter().rect_filled(r, CornerRadius::same(4), t.accent);
             icons::paint(ui.painter(), r.shrink(3.0), icons::file_mark(file.kind), t.accent_on);
@@ -899,7 +961,17 @@ fn spoken(file: &Shown, now: u64) -> String {
     if detail.is_empty() { file.name.clone() } else { format!("{}, {detail}", file.name) }
 }
 
-fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u64, time: f64, reduce_motion: bool) -> Option<Action> {
+#[allow(clippy::too_many_arguments)]
+fn grid(
+    ui: &mut Ui,
+    t: &Tokens,
+    recents: &mut Recents,
+    files: &[Shown],
+    pictures: &std::collections::BTreeMap<u64, Option<crate::home::Thumb>>,
+    now: u64,
+    time: f64,
+    reduce_motion: bool,
+) -> Option<Action> {
     let (columns, card_w) = grid_columns(ui.available_width());
     let (picture_h, card_h) = card_heights(card_w);
     let mut action = None;
@@ -912,7 +984,15 @@ fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
             a11y::named_button(&resp, &spoken(file, now));
             let resp = resp.on_hover_text(&file.path);
             let visible = ui.is_rect_visible(rect);
-            let picture = recents.picture(&file.path, visible, time);
+            // An open file's picture is drawn from the file as it is now; the others are read from
+            // disk.
+            let picture = match file.open {
+                Some(o) => Some(match pictures.get(&o.uid).and_then(Option::as_ref) {
+                    Some(thumb) => (Some(thumb.page), thumb.texture.clone(), 1.0),
+                    None => (None, None, 1.0),
+                }),
+                None => recents.picture(&file.path, visible, time),
+            };
             let selected = recents.selected.as_deref() == Some(file.path.as_str());
             if let Some(a) = interact(ui, &resp, recents, file) {
                 action = Some(a);
@@ -1061,7 +1141,9 @@ fn list(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
             continue;
         }
         // The row's mark says what kind of file it is: read it like a card's picture.
-        recents.picture(&file.path, true, ui.input(|i| i.time));
+        if file.open.is_none() {
+            recents.picture(&file.path, true, ui.input(|i| i.time));
+        }
         let selected = recents.selected.as_deref() == Some(file.path.as_str());
         let p = ui.painter();
         if selected {

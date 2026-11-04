@@ -148,6 +148,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
             Shared { edit: SharedLink { id: String::new(), link: i.link.clone(), code }, ..Shared::default() }
         });
         live.share = Some(Share { via, server, access, links });
+        live.quiet = matches!(p.get("quiet"), Some(Value::Bool(true)));
     }
     Ok(s.live_summary())
 }

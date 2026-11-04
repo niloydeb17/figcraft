@@ -190,6 +190,15 @@ pub fn avatar(painter: &egui::Painter, center: Pos2, r: f32, name: &str, fill: C
     painter.text(center, Align2::CENTER_CENTER, initials(name), semibold(r * 0.8), text_on(fill));
 }
 
+/// Your own avatar: your account's picture (Google's, for an account that signs in with Google)
+/// inside a ring of `fill`, else your initials in a circle of it. Everyone else's stay initials.
+pub fn avatar_me(painter: &egui::Painter, center: Pos2, r: f32, name: &str, fill: Color32) {
+    match crate::account_picture::own(painter.ctx()) {
+        Some(picture) => crate::account_picture::paint(painter, center, r, &picture, fill),
+        None => avatar(painter, center, r, name, fill),
+    }
+}
+
 /// FigCraft's remote pointer: a notched dart pointing up-left from `tip`, filled with the
 /// person's colour and edged in white so it shows on any canvas.
 pub fn pointer(painter: &egui::Painter, tip: Pos2, fill: Color32) {
@@ -492,7 +501,7 @@ pub fn people_bar(app: &mut FigApp, ui: &mut Ui, area: Rect) {
     let (show, more) = if peers.len() > fit { (fit - 1, peers.len() - (fit - 1)) } else { (peers.len(), 0) };
     let mut x = area.min.x + R + 2.0;
     let ring = |ui: &Ui, c: Pos2| ui.painter().circle_stroke(c, R + 1.0, Stroke::new(2.0, t.panel));
-    avatar(ui.painter(), pos2(x, cy), R, &me_name, me_fill);
+    avatar_me(ui.painter(), pos2(x, cy), R, &me_name, me_fill);
     // Your avatar's menu: spotlight.
     let mut spotlight = false;
     if in_session {

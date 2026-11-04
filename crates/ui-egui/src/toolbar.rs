@@ -250,8 +250,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let canvas = app.canvas.rect;
     app.ui.actions_rect = None;
     ui.data_mut(|d| d.insert_temp(active_id(), mode_fill(app.ui.right_tab)));
+    // The page's automatic save: the toolbar stays, a quiet status says what's going on.
+    let autosave = autosaving(app);
+    save_status(app, ui, &t, autosave);
     // A file you can't edit now (view only, or on its way to a server): moving around only.
-    if let Some(why) = app.session.active_read_only() {
+    if let Some(why) = app.session.active_read_only().filter(|_| !autosave) {
         view_only_toolbar(app, ui, why);
         return;
     }
@@ -809,6 +812,49 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
             }
         }
     });
+}
+
+/// The active file is on its way to the server because the page is keeping it there
+/// (`collab.share {quiet: true}`): edits wait for the upload, but nothing in the toolbar changes.
+fn autosaving(app: &FigApp) -> bool {
+    app.session.active_read_only() == Some(figcraft_engine::live::PUBLISHING) && app.session.live().quiet
+}
+
+/// How long "Saved" stays up, in seconds.
+const SAVED_FOR: f64 = 2.5;
+
+/// "Saving…" while the automatic save uploads, then "Saved" for a moment: a quiet chip above the
+/// toolbar.
+fn save_status(app: &FigApp, ui: &Ui, t: &Tokens, saving: bool) {
+    let ctx = ui.ctx();
+    let now = ctx.input(|i| i.time);
+    let id = egui::Id::unique("autosave_status");
+    // (it was saving last frame, when "Saved" went up)
+    let (was_saving, saved_at) = ctx.data(|d| d.get_temp::<(bool, Option<f64>)>(id)).unwrap_or((false, None));
+    let saved_at = match (saving, was_saving) {
+        (true, _) => None,
+        (false, true) => Some(now),
+        (false, false) => saved_at,
+    };
+    ctx.data_mut(|d| d.insert_temp(id, (saving, saved_at)));
+    let label = if saving {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        tr("Saving…")
+    } else if let Some(at) = saved_at.filter(|at| now - at < SAVED_FOR) {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64((SAVED_FOR - (now - at)).max(0.05)));
+        tr("Saved")
+    } else {
+        return;
+    };
+    let text = ui.painter().layout_no_wrap(label.to_string(), crate::theme::regular(11.5), t.text_secondary);
+    let size = vec2(text.size().x + 20.0, 22.0);
+    let bar = pill_rect(app.canvas.rect, 0.0);
+    let chip = Rect::from_center_size(pos2(bar.center().x, bar.min.y - 8.0 - size.y / 2.0), size);
+    let resp = ui.interact(chip, ui.scope_id().with("autosave"), Sense::hover());
+    a11y::status(&resp, label, label);
+    ui.painter().rect_filled(chip, CornerRadius::same(11), t.panel);
+    ui.painter().rect_stroke(chip, CornerRadius::same(11), Stroke::new(0.5, Color32::from_black_alpha(46)), StrokeKind::Outside);
+    ui.painter().galley(pos2(chip.min.x + 10.0, chip.center().y - text.size().y / 2.0), text, t.text_secondary);
 }
 
 /// The pill shown for a file you can't edit now: Move and Hand (and Comment with a comment link),

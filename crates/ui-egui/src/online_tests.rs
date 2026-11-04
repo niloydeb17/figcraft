@@ -238,7 +238,7 @@ fn nothing_is_asked_until_the_section_opens_then_each_server_once() {
     // Leaving and coming back asks again, once.
     let shapes = h.frames(1);
     let shapes = click(&mut h, &shapes, "Recents");
-    assert!(has_text(&shapes, "Open files"));
+    assert!(has_text(&shapes, "Recently viewed") && !has_text(&shapes, "Open files"));
     open(&mut h);
     assert_eq!(script.lock().unwrap().asked.len(), 4);
 }

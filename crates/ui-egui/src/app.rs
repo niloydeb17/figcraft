@@ -21,6 +21,7 @@ impl FigApp {
     /// when they aren't a picture (the initials stay).
     pub fn set_account_picture(&mut self, ctx: &egui::Context, bytes: &[u8]) -> bool {
         self.ui.account_picture = crate::account_picture::decode(ctx, bytes);
+        crate::account_picture::remember(ctx, self.ui.account_picture.clone());
         ctx.request_repaint();
         self.ui.account_picture.is_some()
     }

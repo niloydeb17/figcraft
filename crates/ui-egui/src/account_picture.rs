@@ -49,3 +49,21 @@ pub fn paint(painter: &Painter, center: Pos2, r: f32, texture: &TextureHandle, r
     painter.add(mesh);
     painter.circle_stroke(center, r, Stroke::new(1.0, ring));
 }
+
+/// Remember `texture` (or forget it) as the picture of the person at this screen, for the
+/// avatars drawn by painters that have no [`FigApp`](crate::FigApp) to ask.
+pub fn remember(ctx: &Context, texture: Option<TextureHandle>) {
+    let id = egui::Id::unique("own_account_picture");
+    ctx.data_mut(|d| {
+        if let Some(t) = texture {
+            d.insert_temp(id, t);
+        } else {
+            d.remove::<TextureHandle>(id);
+        }
+    });
+}
+
+/// The picture of the person at this screen, once the page's server has handed it over.
+pub fn own(ctx: &Context) -> Option<TextureHandle> {
+    ctx.data(|d| d.get_temp::<TextureHandle>(egui::Id::unique("own_account_picture")))
+}

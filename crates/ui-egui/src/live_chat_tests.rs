@@ -117,3 +117,21 @@ fn spotlight_banner_and_your_avatar_menu() {
     assert!(!h.app.session.live().spotlighting);
     assert!(!has_text(&h.frames(2), "You're spotlighting: everyone follows your view"));
 }
+
+#[test]
+fn your_own_avatar_is_your_account_picture_and_nobody_elses() {
+    let mut h = ready();
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "AL"), "your initials until the picture is in");
+    let mut png = Vec::new();
+    let image = image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 60, 60, 255]));
+    image::DynamicImage::ImageRgba8(image).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    assert!(h.app.set_account_picture(&h.ctx, &png));
+    let picture = crate::account_picture::own(&h.ctx).expect("remembered for the avatars");
+    let shapes = h.frames(2);
+    let drawn = shapes.iter().filter(|s| matches!(s, egui::Shape::Mesh(m) if m.texture_id == picture.id())).count();
+    assert_eq!(drawn, 1, "yours is the picture");
+    assert!(!has_text(&shapes, "AL"));
+    // Others stay on initials.
+    assert!(texts(&shapes).iter().any(|(t, _, _)| t == "H"), "{:?}", texts(&shapes));
+}
