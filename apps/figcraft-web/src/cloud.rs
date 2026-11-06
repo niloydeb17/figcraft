@@ -3,8 +3,17 @@
 //! Home ▸ Recently viewed, after a reload and on other computers), and the page's address follows
 //! the open file (`#file=<code or link>`), so a reload or a bookmark opens that file again without
 //! asking. An automatic save that fails is tried again, a little later each time.
+//!
+//! The file you are in goes first in the recent files whenever you open or switch to it, and its
+//! card's picture (`figcraft_ui_egui::card_picture_png`) goes to the account's server
+//! (`POST /auth/recents/picture`) once it has settled, again at most every [`PICTURE_EVERY_MS`]
+//! while it changes and when you go back to Home, so Home shows it after a reload.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
+
+use base64::Engine as _;
 
 use figcraft_ui_egui::FigApp;
 use serde_json::json;
@@ -12,6 +21,10 @@ use serde_json::json;
 /// How long a file must stay still (no new edit, no gesture or text edit going on) before it goes
 /// to the server, in milliseconds: publishing makes the tab read-only for a moment.
 const SETTLE_MS: f64 = 1_500.0;
+/// The shortest time between two pictures of a file that keeps changing, and how long after a file
+/// first goes on the account's list its first picture waits (so the list has it when it comes).
+const PICTURE_EVERY_MS: f64 = 30_000.0;
+const PICTURE_AFTER_LISTED_MS: f64 = 2_000.0;
 
 /// The page's own files on its server, and the address that names the open one.
 #[derive(Default)]
@@ -22,8 +35,16 @@ pub struct Cloud {
     sent: std::collections::BTreeSet<u64>,
     /// Automatic saves that failed: when each file may be tried again, and how many tries so far.
     retry: BTreeMap<u64, (f64, u32)>,
-    /// The name and kind the account's recent files last heard for each named file.
+    /// The name and kind the account's recent files last heard for each named file, and when it
+    /// first heard of it.
     told: BTreeMap<u64, (String, &'static str)>,
+    told_at: BTreeMap<u64, f64>,
+    /// The file last put first for being the one you are in.
+    viewed: Option<u64>,
+    /// The revision each named file's picture was last made of, and when.
+    pictured: BTreeMap<u64, (u64, f64)>,
+    /// Files whose picture didn't reach the server (made again on the next turn).
+    unsent: Rc<RefCell<Vec<u64>>>,
     /// The open file's uid and revision, and when that revision was first seen.
     still: Option<(u64, u64, f64)>,
     /// The page opened a file from its address: the first file joined keeps that address.
@@ -45,10 +66,11 @@ impl Cloud {
     /// server, ask for another frame so it goes even if the pointer stays still.
     pub fn tick(&mut self, fig: &mut FigApp, ctx: &egui::Context) {
         self.follow_address(fig);
-        self.tell_recents(fig);
         let now = js_sys::Date::now();
+        self.tell_recents(fig, now);
+        let picturing = self.picture(fig, ctx, now);
         let failing = self.watch_failures(fig, now);
-        if self.keep(fig, now) || failing {
+        if self.keep(fig, now) || failing || picturing {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
         }
     }
@@ -136,21 +158,93 @@ impl Cloud {
         waiting
     }
 
-    /// Keep each named file first in the account's recent files, again when its name changes.
-    fn tell_recents(&mut self, fig: &mut FigApp) {
+    /// Keep each named file first in the account's recent files, again when its name changes and
+    /// whenever you switch to it.
+    fn tell_recents(&mut self, fig: &mut FigApp, now: f64) {
+        let home = fig.ui.home || !fig.has_files();
+        let active = fig.session.docs.get(fig.session.active).map(|d| d.uid).filter(|_| !home);
         let mut tell = Vec::new();
         for (uid, wanted) in &self.named {
             let Some(d) = fig.session.docs.iter().find(|d| d.uid == *uid) else { continue };
-            let now = (d.doc.name.clone(), d.doc.kind.id());
-            if self.told.get(uid) != Some(&now) {
+            let current = (d.doc.name.clone(), d.doc.kind.id());
+            let switched = active == Some(*uid) && self.viewed != active;
+            if self.told.get(uid) != Some(&current) || switched {
                 let Some(target) = file_target(wanted) else { continue };
-                tell.push((*uid, target, now));
+                tell.push((*uid, target, current));
             }
         }
         for (uid, target, (name, kind)) in tell {
             fig.run("account.recentOpened", json!({"target": target, "name": name, "kind": kind, "tab": uid}));
             self.told.insert(uid, (name, kind));
+            self.told_at.entry(uid).or_insert(now);
+            if active == Some(uid) {
+                self.viewed = active;
+            }
         }
+        // Back from Home (or another file), the one you are in counts as viewed again.
+        if active.is_none() || !active.is_some_and(|a| self.named.contains_key(&a)) {
+            self.viewed = None;
+        }
+    }
+
+    /// Make and send the picture of each named file that changed since its last one: once the file
+    /// has been on the list a moment and is still, then at most every [`PICTURE_EVERY_MS`], and at
+    /// once on the way back to Home. One picture a frame. True while one waits.
+    fn picture(&mut self, fig: &mut FigApp, ctx: &egui::Context, now: f64) -> bool {
+        for uid in std::mem::take(&mut *self.unsent.borrow_mut()) {
+            // Made again on its next turn, not at once (the server may be down).
+            if let Some((revision, _)) = self.pictured.get_mut(&uid) {
+                *revision = u64::MAX;
+            }
+        }
+        let home = fig.ui.home || !fig.has_files();
+        let open: Vec<u64> = fig.session.docs.iter().map(|d| d.uid).collect();
+        self.pictured.retain(|uid, _| open.contains(uid));
+        let mut waiting = false;
+        let mut next = None;
+        for (uid, wanted) in &self.named {
+            let Some(d) = fig.session.docs.iter().find(|d| d.uid == *uid) else { continue };
+            let Some(listed) = self.told_at.get(uid) else { continue };
+            let last = self.pictured.get(uid).copied();
+            if last.is_some_and(|(revision, _)| revision == d.revision) {
+                continue;
+            }
+            let busy = d.interaction.is_some() || d.text_edit.is_some();
+            let due = match last {
+                None => now - listed >= PICTURE_AFTER_LISTED_MS,
+                Some((_, at)) => home || now - at >= PICTURE_EVERY_MS,
+            };
+            if !due || busy {
+                waiting = true;
+                continue;
+            }
+            if next.is_none()
+                && let Some(target) = file_target(wanted)
+            {
+                next = Some((*uid, d.revision, target));
+            }
+        }
+        let Some((uid, revision, target)) = next else { return waiting };
+        self.pictured.insert(uid, (revision, now));
+        let Some(png) = fig.session.docs.iter().find(|d| d.uid == uid).and_then(|d| figcraft_ui_egui::card_picture_png(&d.doc)) else {
+            return waiting;
+        };
+        fig.set_recent_picture(ctx, &target, &png);
+        // Signed in: the account's server keeps it for a reload and other computers.
+        if fig.session.account.account.is_some() {
+            let body = json!({"target": target, "png": base64::engine::general_purpose::STANDARD.encode(&png)}).to_string();
+            let unsent = self.unsent.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match crate::account::fetch("POST", "/auth/recents/picture", Some(body)).await {
+                    Some((200, _)) => {}
+                    other => {
+                        log::warn!("a recent file's picture didn't reach the server: {:?}", other.map(|(s, _)| s));
+                        unsent.borrow_mut().push(uid);
+                    }
+                }
+            });
+        }
+        true
     }
 
     /// Point the page's address at the open file once it is on a server.

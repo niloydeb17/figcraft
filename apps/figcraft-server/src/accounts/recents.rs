@@ -5,10 +5,17 @@
 //!
 //! An entry's `target` is the file's join code or link: it lets whoever has it into the file, so
 //! it is only ever handed back to the account that kept it.
+//!
+//! Each file may have a picture of itself (a PNG the browser drew of the open file, as Home's card
+//! shows it), kept beside the list in `accounts/recents/<id>/<key>.png` and named in the list by a
+//! token (`<key>-<version>`, where `key` is a hash of the target, never the target itself), so a
+//! reload or another computer shows the card's picture without opening the file.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use sha2::{Digest, Sha256};
 
 use super::{read_json, write_json};
 use crate::store::now;
@@ -19,6 +26,9 @@ pub const DIR: &str = "recents";
 pub const MAX: usize = 100;
 pub const MAX_TARGET: usize = 4096;
 pub const MAX_NAME: usize = 128;
+/// The largest picture kept (PNG bytes), and its widest or tallest side (pixels).
+pub const MAX_PICTURE: usize = 384 << 10;
+pub const MAX_PICTURE_SIDE: u32 = 2048;
 
 /// A file in an account's list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -29,6 +39,9 @@ pub struct Recent {
     pub kind: String,
     /// When it was last made, opened or renamed (seconds since 1970).
     pub opened: u64,
+    /// Its picture's token (`GET /auth/recents/picture?p=<token>`), once a browser sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 /// What a browser asks of the list (`POST /auth/recents`).
@@ -66,6 +79,81 @@ fn path(accounts_dir: &Path, user: &str) -> Option<PathBuf> {
     ok.then(|| accounts_dir.join(DIR).join(format!("{user}.json")))
 }
 
+/// The folder holding account `user`'s pictures.
+fn pictures(accounts_dir: &Path, user: &str) -> Option<PathBuf> {
+    path(accounts_dir, user).map(|p| p.with_extension(""))
+}
+
+/// The name a target's picture is kept by: a hash of it, so the target never shows in a file name
+/// or an address.
+fn picture_key(target: &str) -> String {
+    Sha256::digest(target.as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
+/// A folder only the server's user can read (the files in it name nobody's files, but are theirs).
+fn make_private_dir(dir: &Path) -> Result<(), String> {
+    let mut dirs = std::fs::DirBuilder::new();
+    dirs.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+    dirs.create(dir).map_err(|e| format!("can't create {}: {e}", dir.display()))
+}
+
+/// The width and height a PNG says it has; `None` for anything that isn't a PNG.
+fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if bytes.get(..8)? != SIGNATURE || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let be = |at: usize| bytes.get(at..at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+    Some((be(16)?, be(20)?))
+}
+
+/// Forget the pictures of the files `before` had and `after` hasn't.
+fn drop_pictures(accounts_dir: &Path, user: &str, before: &[Recent], after: &[Recent]) {
+    let Some(dir) = pictures(accounts_dir, user) else { return };
+    for gone in before.iter().filter(|b| b.picture.is_some() && !after.iter().any(|a| a.target == b.target)) {
+        let file = dir.join(format!("{}.png", picture_key(&gone.target)));
+        if let Err(e) = std::fs::remove_file(&file)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("accounts: a recent file's picture can't be removed: {e}");
+        }
+    }
+}
+
+/// Keep `png` as the picture of the file with `target` in account `user`'s list; the list after.
+/// Only a listed file keeps a picture, and only a PNG within [`MAX_PICTURE`] and
+/// [`MAX_PICTURE_SIDE`].
+pub fn set_picture(accounts_dir: &Path, user: &str, target: &str, png: &[u8]) -> Result<Vec<Recent>, String> {
+    let (p, dir) = path(accounts_dir, user).zip(pictures(accounts_dir, user)).ok_or("no such account")?;
+    let target = clean_target(target)?;
+    if png.len() > MAX_PICTURE {
+        return Err(format!("a picture is at most {} KB", MAX_PICTURE >> 10));
+    }
+    match png_size(png) {
+        Some((w, h)) if (1..=MAX_PICTURE_SIDE).contains(&w) && (1..=MAX_PICTURE_SIDE).contains(&h) => {}
+        _ => return Err(format!("a picture is a PNG at most {MAX_PICTURE_SIDE} pixels a side")),
+    }
+    let mut list = list(accounts_dir, user);
+    let entry = list.iter_mut().find(|r| r.target == target).ok_or("that file isn't in the list")?;
+    let key = picture_key(&target);
+    make_private_dir(&dir)?;
+    crate::disk::write_atomic_private(&dir.join(format!("{key}.png")), png).map_err(|e| format!("can't keep the picture: {e}"))?;
+    // A new token for new bytes, so a browser never shows an old picture it kept.
+    entry.picture = Some(format!("{key}-{:08x}", crc32fast::hash(png)));
+    write_json(&p, &list)?;
+    Ok(list)
+}
+
+/// The picture named by `token` in account `user`'s list (`None` for one not in it).
+pub fn picture(accounts_dir: &Path, user: &str, token: &str) -> Option<Vec<u8>> {
+    let list = list(accounts_dir, user);
+    let entry = list.iter().find(|r| r.picture.as_deref() == Some(token))?;
+    let file = pictures(accounts_dir, user)?.join(format!("{}.png", picture_key(&entry.target)));
+    crate::disk::read_capped(&file, MAX_PICTURE as u64).ok()
+}
+
 /// Account `user`'s list, newest first (empty when it has none; a damaged one reads as empty and
 /// is left on disk).
 pub fn list(accounts_dir: &Path, user: &str) -> Vec<Recent> {
@@ -96,18 +184,16 @@ pub fn apply(accounts_dir: &Path, user: &str, change: Change) -> Result<Vec<Rece
         let name: String = o.name.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
         let name = if name.is_empty() { "Untitled".to_string() } else { name };
         let kind = if o.kind == "board" { "board" } else { "design" }.to_string();
+        // Its picture stays until a new one comes.
+        let picture = list.iter().find(|r| r.target == target).and_then(|r| r.picture.clone());
         list.retain(|r| r.target != target);
-        list.insert(0, Recent { target, name, kind, opened: now() });
+        list.insert(0, Recent { target, name, kind, opened: now(), picture });
         list.truncate(MAX);
     }
     if list != before {
-        let dir = accounts_dir.join(DIR);
-        let mut dirs = std::fs::DirBuilder::new();
-        dirs.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
-        dirs.create(&dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
+        make_private_dir(&accounts_dir.join(DIR))?;
         write_json(&p, &list)?;
+        drop_pictures(accounts_dir, user, &before, &list);
     }
     Ok(list)
 }

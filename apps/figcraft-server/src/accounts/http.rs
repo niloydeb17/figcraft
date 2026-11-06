@@ -10,6 +10,10 @@
 //! | `GET /auth/avatar` | the picture Google gave for this account (fetched by the server, kept a day), or 404 |
 //! | `POST /auth/profile` | JSON `{name?, role?, roleOther?, experience?, plan?, createFirst?, tips?, onboarded?}`: the onboarding answers |
 //! | `POST /auth/invite` | JSON `{emails: [...]}`: people to invite; `{invited, link, emailed: false}` (no email is sent yet) |
+//! | `GET /auth/recents` | `{files: [{target, name, kind, opened, picture?}]}`: the account's recent files, newest first |
+//! | `POST /auth/recents` | JSON `{open: {target, name, kind}}` or `{forget: target}`; the list after |
+//! | `POST /auth/recents/picture` | JSON `{target, png}` (base64): the picture of a file in the list; the list after |
+//! | `GET /auth/recents/picture?p=<token>` | that picture (`image/png`), or 404 |
 //! | `GET /auth/check` | 204 when signed in, else 401 (the proxy asks before serving the app) |
 //! | `GET /auth/google` | starts signing in with Google (when it is set up) |
 //! | `GET /auth/google/callback` | where Google sends the browser back |
@@ -25,6 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use figcraft_collab::same_secret;
 use figcraft_collab_net::token;
 use serde::{Deserialize, Serialize};
@@ -40,6 +45,8 @@ const GOOGLE_COOKIE: &str = "figcraft_google";
 /// Longest request head and body.
 const MAX_HEAD: usize = 16 << 10;
 const MAX_BODY: usize = 16 << 10;
+/// Longest body of `POST /auth/recents/picture`: a picture in base64, and its target.
+const MAX_PICTURE_BODY: usize = (super::recents::MAX_PICTURE / 3 + 1) * 4 + (8 << 10);
 /// Most connections at once.
 const MAX_CONNECTIONS: usize = 64;
 /// How long a request may take to arrive.
@@ -316,6 +323,31 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             let files = ctx.accounts().change_recents(&u.id, change)?;
             Ok(serde_json::json!({"files": files}))
         }),
+        ("POST", "/auth/recents/picture") => signed_in_json(ctx, req, |ctx, u| {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Body {
+                target: String,
+                png: String,
+            }
+            const BAD: &str = "give `target` (a file in the list) and `png` (the picture, base64)";
+            let body: Body = serde_json::from_slice(&req.body).map_err(|_| BAD.to_string())?;
+            let png = base64::engine::general_purpose::STANDARD.decode(body.png.trim()).map_err(|_| BAD.to_string())?;
+            let files = ctx.accounts().set_recent_picture(&u.id, &body.target, &png)?;
+            Ok(serde_json::json!({"files": files}))
+        }),
+        ("GET", "/auth/recents/picture") => {
+            let picture = current(ctx, req).zip(req.query_value("p")).and_then(|(u, token)| ctx.accounts().recent_picture(&u.id, &token));
+            match picture {
+                // The token changes with the picture, so the browser may keep it.
+                Some(png) => Response {
+                    status: 200,
+                    headers: vec![("Content-Type", "image/png".into()), ("Cache-Control", "private, max-age=31536000, immutable".into())],
+                    body: png,
+                },
+                None => Response { status: 404, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() },
+            }
+        }
         ("GET", "/auth/avatar") => match current(ctx, req) {
             Some(u) => avatar(ctx, &u),
             None => Response { status: 401, headers: vec![("Cache-Control", "no-store".into())], body: Vec::new() },
@@ -325,7 +357,16 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
         ("POST", "/auth/admin") => admin(ctx, req),
         (
             _,
-            "/login" | "/logout" | "/auth/me" | "/auth/avatar" | "/auth/check" | "/auth/admin" | "/auth/profile" | "/auth/invite" | "/auth/recents",
+            "/login"
+            | "/logout"
+            | "/auth/me"
+            | "/auth/avatar"
+            | "/auth/check"
+            | "/auth/admin"
+            | "/auth/profile"
+            | "/auth/invite"
+            | "/auth/recents"
+            | "/auth/recents/picture",
         ) => Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site)),
         _ => Response::html(404, pages::message("Page not found", "There's nothing at this address.", &ctx.settings.site)),
     }
@@ -611,7 +652,7 @@ pub fn read_request(stream: &mut impl Read) -> Result<Request, u16> {
     if headers.iter().any(|(n, _)| n == "transfer-encoding") {
         return Err(400);
     }
-    if length > MAX_BODY {
+    if length > if path == "/auth/recents/picture" { MAX_PICTURE_BODY } else { MAX_BODY } {
         return Err(413);
     }
     let mut body = buf.get(head_len..).unwrap_or_default().to_vec();

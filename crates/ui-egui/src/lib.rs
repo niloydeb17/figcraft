@@ -312,6 +312,7 @@ pub use dialogs::updates_ui;
 pub use dialogs::variables_panel;
 pub use home::home_recents;
 pub use home::online;
+pub use home::{CARD_PICTURE_PX, card_picture_png};
 pub use panels::assets_panel;
 pub use panels::component_panel;
 pub use panels::dev_compare;

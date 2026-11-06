@@ -373,6 +373,9 @@ pub struct Recents {
     /// the window gets the focus back.
     checked: f64,
     focused: bool,
+    /// The pictures of the account's files on the page's server, by target: drawn here of a file
+    /// open in this page, or kept by the server for it ([`Recents::set_cloud_picture`]).
+    cloud: HashMap<String, Ready>,
 }
 
 /// How often the dates of the recent files in view are read again (seconds).
@@ -548,6 +551,34 @@ impl Recents {
         Some((r.page, r.texture.clone(), (((time - r.arrived) / FADE_SECS) as f32).clamp(0.0, 1.0)))
     }
 
+    /// Take `png` (a picture made by [`crate::home::card_picture_png`]) as the picture of the
+    /// account's file `target`. False for bytes that aren't a picture.
+    pub fn set_cloud_picture(&mut self, ctx: &egui::Context, target: &str, png: &[u8]) -> bool {
+        let Some(p) = figcraft_format::thumbnail::decode_thumbnail(png, PICTURE_PX) else { return false };
+        let image = egui::ColorImage::from_rgba_unmultiplied([p.width as usize, p.height as usize], &p.rgba);
+        // The page's colour fills the picture's edges.
+        let page = p.rgba.get(..4).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
+        let texture = ctx.load_texture(format!("recent-cloud:{}", self.cloud.len()), image, egui::TextureOptions::LINEAR);
+        let time = ctx.input(|i| i.time);
+        // A file whose picture was shown already changes at once; a first one fades in.
+        let arrived = if self.cloud.contains_key(target) { f64::NEG_INFINITY } else { time };
+        let kind = figcraft_doc::FileKind::Design;
+        self.cloud.insert(target.to_string(), Ready { modified: None, page, texture: Some(texture), kind, arrived });
+        ctx.request_repaint();
+        true
+    }
+
+    /// Whether the account's file `target` has a picture (tests, `ui.inspect`).
+    pub fn has_cloud_picture(&self, target: &str) -> bool {
+        self.cloud.contains_key(target)
+    }
+
+    /// The picture of the account's file `target` as [`Recents::picture`] gives one.
+    fn cloud_picture(&self, target: &str, time: f64) -> Option<(Option<Color32>, Option<egui::TextureHandle>, f32)> {
+        let r = self.cloud.get(target)?;
+        Some((r.page, r.texture.clone(), (((time - r.arrived) / FADE_SECS) as f32).clamp(0.0, 1.0)))
+    }
+
     /// The files as listed, with what is known about them.
     fn shown(&self, paths: &[String]) -> Vec<Shown> {
         paths
@@ -659,7 +690,10 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
                 f.name = o.name.clone();
             }
             None => {
-                let stat = Stat { exists: true, modified: Some(now), created: None };
+                // A file on the page's server goes by when it was last opened or viewed, like the
+                // ones that aren't open; one only here is newest.
+                let viewed = app.session.account.recent_for_tab(o.uid).map_or(now, |r| r.opened.min(now));
+                let stat = Stat { exists: true, modified: Some(viewed), created: None };
                 let mut f = Shown::new(&format!("{TAB}{}", o.uid), Some(stat));
                 (f.name, f.kind, f.open) = (o.name.clone(), o.kind, Some(tab));
                 files.push(f);
@@ -1033,9 +1067,11 @@ fn grid(
                     Some(thumb) => (Some(thumb.page), thumb.texture.clone(), 1.0),
                     None => (None, None, 1.0),
                 }),
-                // The server's files have no picture here yet: the page's colour stands in.
-                None if file.cloud.is_some() => Some((None, None, 1.0)),
-                None => recents.picture(&file.path, visible, time),
+                // A file on the page's server: the picture kept of it, else a file glyph.
+                None => match &file.cloud {
+                    Some(target) => Some(recents.cloud_picture(target, time).unwrap_or((None, None, 1.0))),
+                    None => recents.picture(&file.path, visible, time),
+                },
             };
             let selected = recents.selected.as_deref() == Some(file.path.as_str());
             if let Some(a) = interact(ui, &resp, recents, file) {
@@ -1102,7 +1138,9 @@ fn card(paint: CardPaint<'_>) {
             }
             if let Some(texture) = texture {
                 let size = texture.size_vec2();
-                let inner = area.shrink(area.height() * 0.05);
+                // A picture kept on the server carries its margin and page colour already.
+                let kept = file.open.is_none() && file.cloud.is_some();
+                let inner = if kept { area } else { area.shrink(area.height() * 0.05) };
                 let fit = (inner.width() / size.x.max(1.0)).min(inner.height() / size.y.max(1.0));
                 let image = Rect::from_center_size(inner.center(), size * fit);
                 p.image(texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(alpha));

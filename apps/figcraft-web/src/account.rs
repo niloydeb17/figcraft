@@ -22,6 +22,24 @@ pub struct Account {
     picture: Rc<RefCell<Option<Vec<u8>>>>,
     /// The account's recent files (`account.recents` parameters), when they arrived.
     recents: Rc<RefCell<Option<Value>>>,
+    /// Pictures of recent files the server kept (target, PNG bytes), as they arrive.
+    pictures: Rc<RefCell<Vec<Picture>>>,
+}
+
+/// A recent file's target and the PNG the server kept of it.
+type Picture = (String, Vec<u8>);
+
+/// Most recent files whose pictures are fetched when the page opens (Home shows a dozen at first).
+const PICTURES_FETCHED: usize = 24;
+
+/// The (target, picture token) of each file in `/auth/recents`'s answer that has a picture.
+fn picture_tokens(list: &Value) -> Vec<(String, String)> {
+    let files = list.get("files").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    files
+        .iter()
+        .filter_map(|f| Some((f.get("target")?.as_str()?.to_string(), f.get("picture")?.as_str()?.to_string())))
+        .take(PICTURES_FETCHED)
+        .collect()
 }
 
 impl Account {
@@ -29,6 +47,7 @@ impl Account {
         if !self.asked {
             self.asked = true;
             let (arrived, picture, recents, ctx) = (self.arrived.clone(), self.picture.clone(), self.recents.clone(), ctx.clone());
+            let pictures = self.pictures.clone();
             spawn_local(async move {
                 let Some((status, body)) = fetch("GET", "/auth/me", None).await else { return };
                 if let Some(p) = crate::account_me::params(status, &body) {
@@ -38,8 +57,17 @@ impl Account {
                     match fetch("GET", "/auth/recents", None).await {
                         Some((200, text)) => match serde_json::from_str::<Value>(&text) {
                             Ok(v) => {
+                                let tokens = picture_tokens(&v);
                                 *recents.borrow_mut() = Some(v);
                                 ctx.request_repaint();
+                                // Each card's picture, newest files first.
+                                for (target, token) in tokens {
+                                    let path = format!("/auth/recents/picture?p={}", String::from(js_sys::encode_uri_component(&token)));
+                                    if let Some(bytes) = fetch_bytes(&path).await {
+                                        pictures.borrow_mut().push((target, bytes));
+                                        ctx.request_repaint();
+                                    }
+                                }
                             }
                             Err(e) => log::warn!("/auth/recents: not a list: {e}"),
                         },
@@ -67,6 +95,12 @@ impl Account {
         if let Some(list) = self.recents.borrow_mut().take() {
             fig.run("account.recents", list);
         }
+        for (target, bytes) in std::mem::take(&mut *self.pictures.borrow_mut()) {
+            // One drawn in this page already is newer than the server's.
+            if !fig.ui.home_view.recents.has_cloud_picture(&target) && !fig.set_recent_picture(ctx, &target, &bytes) {
+                log::warn!("a recent file's picture from the server isn't a picture");
+            }
+        }
         for o in fig.session.account.take_outgoing() {
             let (path, body) = match o {
                 Outgoing::Profile(v) => ("/auth/profile", v),
@@ -86,7 +120,7 @@ impl Account {
 }
 
 /// One same-origin request (the session cookie goes with it): its status and text.
-async fn fetch(method: &str, path: &str, body: Option<String>) -> Option<(u16, String)> {
+pub(crate) async fn fetch(method: &str, path: &str, body: Option<String>) -> Option<(u16, String)> {
     let window = web_sys::window()?;
     let init = web_sys::RequestInit::new();
     init.set_method(method);

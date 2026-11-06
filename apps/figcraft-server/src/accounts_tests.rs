@@ -406,6 +406,7 @@ fn junk_requests_never_panic() {
             "/auth/profile",
             "/auth/invite",
             "/auth/recents",
+            "/auth/recents/picture",
         ] {
             let mut r = post(path, &junk, Some(&junk));
             r.query = junk.clone();
@@ -585,4 +586,82 @@ fn recent_files_belong_to_their_account() {
         handle(&c, &post_json("/auth/recents", &format!(r#"{{"open":{{"target":"T-{i}"}}}}"#), &ada));
     }
     assert_eq!(Accounts::open(dir.path(), true, 21.0).unwrap().recents(&id).len(), accounts::recents::MAX);
+}
+
+/// A PNG `w` by `h` as far as its header says (enough for the server, which never decodes it).
+fn png_header(w: u32, h: u32) -> Vec<u8> {
+    let mut b = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+    b.extend_from_slice(b"IHDR");
+    b.extend_from_slice(&w.to_be_bytes());
+    b.extend_from_slice(&h.to_be_bytes());
+    b.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+/// A recent file's picture is kept with it: only for a listed file and its own account, handed back
+/// by a token that changes with the picture, kept when the file is opened again, and gone with the
+/// file when it leaves the list.
+#[test]
+fn recent_files_keep_their_pictures() {
+    use base64::engine::general_purpose::STANDARD;
+    let dir = TempDir::new("acc-recent-pictures");
+    let c = ctx(&dir, true);
+    let ada = token(&handle(&c, &post("/login", "email=ada%40example.com&password=12345678", None)));
+    let bo = token(&handle(&c, &post("/login", "email=bo%40example.com&password=12345678", None)));
+    let open = |target: &str| post_json("/auth/recents", &format!(r#"{{"open":{{"target":"{target}","name":"Landing"}}}}"#), &ada);
+    let send = |target: &str, png: &[u8], who: &str| {
+        handle(&c, &post_json("/auth/recents/picture", &format!(r#"{{"target":"{target}","png":"{}"}}"#, STANDARD.encode(png)), who))
+    };
+    let token_of = |target: &str| -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(&body(&handle(&c, &get("/auth/recents", "", Some(&ada))))).unwrap();
+        v["files"].as_array().unwrap().iter().find(|f| f["target"] == target).and_then(|f| f["picture"].as_str().map(String::from))
+    };
+    // Not in the list: nothing kept.
+    let first = png_header(640, 360);
+    assert_eq!(send("K7M-2QX-9TD", &first, &ada).status, 400);
+    assert_eq!(handle(&c, &open("K7M-2QX-9TD")).status, 200);
+    assert_eq!(token_of("K7M-2QX-9TD"), None);
+    let r = send("K7M-2QX-9TD", &first, &ada);
+    assert_eq!(r.status, 200, "{}", body(&r));
+    let t1 = token_of("K7M-2QX-9TD").expect("a token");
+    assert!(!t1.contains("K7M"), "the token never names the target");
+    let got = handle(&c, &get("/auth/recents/picture", &format!("p={t1}"), Some(&ada)));
+    assert_eq!((got.status, got.body.clone()), (200, first.clone()));
+    // Someone else, or signed out, gets nothing.
+    assert_eq!(handle(&c, &get("/auth/recents/picture", &format!("p={t1}"), Some(&bo))).status, 404);
+    assert_eq!(handle(&c, &get("/auth/recents/picture", &format!("p={t1}"), None)).status, 404);
+    // A new picture, a new token; the old one is gone.
+    let second = png_header(320, 180);
+    assert_eq!(send("K7M-2QX-9TD", &second, &ada).status, 200);
+    let t2 = token_of("K7M-2QX-9TD").unwrap();
+    assert_ne!(t1, t2);
+    assert_eq!(handle(&c, &get("/auth/recents/picture", &format!("p={t1}"), Some(&ada))).status, 404);
+    assert_eq!(handle(&c, &get("/auth/recents/picture", &format!("p={t2}"), Some(&ada))).body, second);
+    // Opened again: the picture stays.
+    assert_eq!(handle(&c, &open("K7M-2QX-9TD")).status, 200);
+    assert_eq!(token_of("K7M-2QX-9TD").as_deref(), Some(t2.as_str()));
+    // Junk is refused: not a PNG, too large a side, too many bytes, not base64.
+    for bad in [b"not a png".to_vec(), png_header(0, 10), png_header(4096, 10), {
+        let mut big = png_header(10, 10);
+        big.resize(accounts::recents::MAX_PICTURE + 1, 0);
+        big
+    }] {
+        assert_eq!(send("K7M-2QX-9TD", &bad, &ada).status, 400);
+    }
+    assert_eq!(handle(&c, &post_json("/auth/recents/picture", r#"{"target":"K7M-2QX-9TD","png":"%%%"}"#, &ada)).status, 400);
+    assert_eq!(send("K7M-2QX-9TD", &first, "forged").status, 401);
+    // Forgotten: its picture goes too.
+    let pictures = dir.path().join("accounts").join("recents");
+    let count = || {
+        std::fs::read_dir(&pictures)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_dir())
+            .flat_map(|d| std::fs::read_dir(d.path()).unwrap())
+            .count()
+    };
+    assert_eq!(count(), 1);
+    assert_eq!(handle(&c, &post_json("/auth/recents", r#"{"forget":"K7M-2QX-9TD"}"#, &ada)).status, 200);
+    assert_eq!(count(), 0);
+    assert_eq!(handle(&c, &get("/auth/recents/picture", &format!("p={t2}"), Some(&ada))).status, 404);
 }

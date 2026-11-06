@@ -591,6 +591,16 @@ impl Accounts {
         recents::apply(&self.dir, user, change)
     }
 
+    /// Keep `png` as the picture of `user`'s recent file `target`; the list after.
+    pub fn set_recent_picture(&mut self, user: &str, target: &str, png: &[u8]) -> Result<Vec<recents::Recent>, String> {
+        recents::set_picture(&self.dir, user, target, png)
+    }
+
+    /// The picture `token` names in `user`'s recent files.
+    pub fn recent_picture(&self, user: &str, token: &str) -> Option<Vec<u8>> {
+        recents::picture(&self.dir, user, token)
+    }
+
     /// Who `user` has invited.
     pub fn invites_by(&self, user: &str) -> Vec<String> {
         self.invites.iter().filter(|i| i.by == user).map(|i| i.email.clone()).collect()

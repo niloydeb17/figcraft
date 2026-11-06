@@ -790,25 +790,35 @@ fn thumbnail(ctx: &egui::Context, template: &Template, background: figcraft_colo
     thumbnail_of(ctx, &doc, &format!("template-thumb-{}", template.id))
 }
 
-/// Render the top of `doc`'s first page to fit a card, on that page's colour. A file with nothing
-/// on its page is that colour alone; `None` only for a file with no page.
-fn thumbnail_of(ctx: &egui::Context, doc: &figcraft_doc::Document, name: &str) -> Option<Thumb> {
+/// What a card shows of `doc`: its first page's colour, the frames on it and the part of the page
+/// they fill (`None` for those when the page is empty); `None` for a file with no page.
+fn card_view(doc: &figcraft_doc::Document) -> Option<(figcraft_color::Color, Vec<figcraft_doc::NodeId>, Option<figcraft_geom::Rect>)> {
     let page = doc.first_page()?;
     let background = match doc.node(page).map(|n| &n.kind) {
         Some(figcraft_doc::NodeKind::Page { background, .. }) => *background,
         _ => return None,
     };
-    let empty = Thumb { texture: None, page: crate::theme::c32(background) };
     let frames = doc.node(page)?.children.clone();
-    let Some(bounds) = frames.iter().filter_map(|id| figcraft_render::export_bounds(doc, *id)).reduce(|a, b| a.union(b)) else {
-        return Some(empty);
-    };
-    if !(bounds.width() > 0.0 && bounds.height() > 0.0) {
-        return Some(empty);
-    }
+    let bounds = frames.iter().filter_map(|id| figcraft_render::export_bounds(doc, *id)).reduce(|a, b| a.union(b));
+    let Some(bounds) = bounds.filter(|b| b.width() > 0.0 && b.height() > 0.0) else { return Some((background, frames, None)) };
     // A page much taller than a card shows its top, as wide as the card.
-    let (w, h) = (f64::from(CARD_MAX - 20.0), f64::from((CARD_MAX * 9.0 / 16.0).round() - 20.0));
+    let (w, h) = card_picture_size();
     let area = figcraft_geom::Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1.min(bounds.y0 + bounds.width() * h / w * 1.5));
+    Some((background, frames, Some(area)))
+}
+
+/// The size the frames are fitted to on a card (points).
+fn card_picture_size() -> (f64, f64) {
+    (f64::from(CARD_MAX - 20.0), f64::from((CARD_MAX * 9.0 / 16.0).round() - 20.0))
+}
+
+/// Render the top of `doc`'s first page to fit a card, on that page's colour. A file with nothing
+/// on its page is that colour alone; `None` only for a file with no page.
+fn thumbnail_of(ctx: &egui::Context, doc: &figcraft_doc::Document, name: &str) -> Option<Thumb> {
+    let (background, frames, area) = card_view(doc)?;
+    let empty = Thumb { texture: None, page: crate::theme::c32(background) };
+    let Some(area) = area else { return Some(empty) };
+    let (w, h) = card_picture_size();
     // As sharp as the card on this screen: small files are drawn larger, not left at one pixel
     // to a point and stretched.
     let scale = ((w / area.width()).min(h / area.height()) * f64::from(ctx.pixels_per_point())).min(8.0);
@@ -817,6 +827,53 @@ fn thumbnail_of(ctx: &egui::Context, doc: &figcraft_doc::Document, name: &str) -
     let texture = ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
     Some(Thumb { texture: Some(texture), page: empty.page })
 }
+
+/// The picture of a file the account's recent files keep on its server (so a reload, or another
+/// computer, shows the card without opening the file): the card's picture as a PNG,
+/// [`CARD_PICTURE_PX`] wide and 16:9, the frames fitted as a card fits them on the page's colour,
+/// which fills the rest. `None` for a file with no page.
+pub fn card_picture_png(doc: &figcraft_doc::Document) -> Option<Vec<u8>> {
+    let (cw, ch) = (CARD_PICTURE_PX, CARD_PICTURE_PX * 9 / 16);
+    let (background, frames, area) = card_view(doc)?;
+    let [r, g, b, a] = background.to_rgba8();
+    let premul = |c: u8| ((u32::from(c) * u32::from(a) + 127) / 255) as u8;
+    let mut canvas = figcraft_render::Pixmap::new(cw, ch)?;
+    for px in canvas.data_mut().chunks_exact_mut(4) {
+        px.copy_from_slice(&[premul(r), premul(g), premul(b), a]);
+    }
+    // The same 5% margin a card leaves round its picture.
+    let inset = f64::from(ch) * 0.05;
+    let (iw, ih) = (f64::from(cw) - 2.0 * inset, f64::from(ch) - 2.0 * inset);
+    if let Some(area) = area
+        && let Some(mut pix) = figcraft_render::render_area(doc, &frames, area, ((iw / area.width()).min(ih / area.height())).min(8.0))
+    {
+        if !doc.color_profile.is_srgb() {
+            doc.color_profile.conversion_to(figcraft_color::ColorProfile::Srgb).apply_pixels(pix.data_mut());
+        }
+        let (pw, ph) = (pix.width().min(cw), pix.height().min(ch));
+        let x0 = (cw - pw) / 2;
+        let y0 = (ch - ph) / 2;
+        let (src_w, dst_w) = (pix.width() as usize * 4, cw as usize * 4);
+        let src = pix.data();
+        let dst = canvas.data_mut();
+        // Source over, both premultiplied.
+        for y in 0..ph as usize {
+            for x in 0..pw as usize {
+                let (si, di) = (y * src_w + x * 4, (y + y0 as usize) * dst_w + (x + x0 as usize) * 4);
+                let (Some(s), Some(d)) = (src.get(si..si + 4), dst.get_mut(di..di + 4)) else { continue };
+                let keep = 255 - u32::from(s.get(3).copied().unwrap_or(0));
+                for (dc, sc) in d.iter_mut().zip(s) {
+                    *dc = (u32::from(*sc) + (u32::from(*dc) * keep + 127) / 255).min(255) as u8;
+                }
+            }
+        }
+    }
+    figcraft_render::encode_png(&canvas).ok()
+}
+
+/// The width of [`card_picture_png`]'s picture (pixels): a card at its widest on a double-density
+/// screen is 720, and a little softer keeps the file small.
+pub const CARD_PICTURE_PX: u32 = 640;
 
 /// The open files' pictures by tab: the revision and theme each was drawn for.
 #[derive(Clone, Default)]

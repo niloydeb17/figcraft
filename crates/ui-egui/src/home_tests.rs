@@ -1092,3 +1092,96 @@ fn the_accounts_files_on_the_server_are_recent_cards() {
     let s = settle(&mut u);
     assert!(!has_text(&s, "Ideas board"));
 }
+
+/// A document with one red frame, as a picture of it would show it.
+fn red_frame_doc() -> figcraft_doc::Document {
+    let mut s = Session::empty();
+    s.execute("file.new", &json!({"name": "Red"})).unwrap();
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 300})).unwrap();
+    s.execute("fill.set", &json!({"color": "#ff0000"})).unwrap();
+    (*s.ds().unwrap().doc).clone()
+}
+
+/// The picture a file on the page's server keeps of itself: 16:9, the page's colour round it and
+/// the frames in the middle; a file with nothing on its page is its colour alone.
+#[test]
+fn a_card_picture_is_the_page_and_its_frames() {
+    let png = crate::home::card_picture_png(&red_frame_doc()).expect("a picture");
+    let p = figcraft_format::thumbnail::decode_thumbnail(&png, 4096).unwrap();
+    assert_eq!((p.width, p.height), (crate::home::CARD_PICTURE_PX, crate::home::CARD_PICTURE_PX * 9 / 16));
+    let at = |x: u32, y: u32| {
+        let i = ((y * p.width + x) * 4) as usize;
+        [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2], p.rgba[i + 3]]
+    };
+    let corner = at(0, 0);
+    assert_eq!(corner[3], 255, "the page's colour fills the edges");
+    assert_ne!(corner, [255, 0, 0, 255]);
+    assert_eq!(at(p.width / 2, p.height / 2), [255, 0, 0, 255], "the frame is in the middle");
+    let empty = crate::home::card_picture_png(&figcraft_doc::Document::new("Empty")).expect("a picture");
+    let e = figcraft_format::thumbnail::decode_thumbnail(&empty, 4096).unwrap();
+    assert!(e.rgba.chunks(4).all(|c| c == e.rgba.get(..4).unwrap()), "an empty page is its colour alone");
+}
+
+/// After a reload a file on the page's server has no tab to draw its picture from: the picture
+/// kept for it is drawn on its card, which has a file glyph until then; bytes that aren't a picture
+/// change nothing.
+#[test]
+fn a_recent_file_on_the_server_shows_the_picture_kept_of_it() {
+    let mut u = first_run();
+    u.app.run("account.recents", json!({"files": [{"target": "K7M-2QX-9TD", "name": "Landing page", "kind": "design", "opened": 1_800_000_000}]}));
+    let s = settle(&mut u);
+    assert!(has_text(&s, "Landing page"));
+    let images = |s: &[Shape]| s.iter().filter(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default())).count();
+    let before = images(&s);
+    let ctx = u.ctx.clone();
+    assert!(!u.app.set_recent_picture(&ctx, "K7M-2QX-9TD", b"not a picture"));
+    assert!(!u.app.ui.home_view.recents.has_cloud_picture("K7M-2QX-9TD"));
+    let png = crate::home::card_picture_png(&red_frame_doc()).unwrap();
+    assert!(u.app.set_recent_picture(&ctx, "K7M-2QX-9TD", &png));
+    let s = settle(&mut u);
+    assert_eq!(images(&s), before + 1, "the kept picture is drawn on the card");
+}
+
+/// Recently viewed is newest first by when each file was last opened or viewed: an open file goes
+/// by when you last opened it (not "now" for every tab), so a file opened since comes before it.
+#[test]
+fn recent_files_are_newest_viewed_first() {
+    let mut u = first_run();
+    let now = figcraft_engine::cmd::comment::now_secs();
+    u.app.run(
+        "account.recents",
+        json!({"files": [
+            {"target": "OLD", "name": "Last week", "kind": "design", "opened": now - 7 * 86_400},
+            {"target": "HOUR", "name": "An hour ago", "kind": "design", "opened": now - 3_600},
+            {"target": "TEN", "name": "Ten minutes ago", "kind": "design", "opened": now - 600},
+            {"target": "DAY", "name": "Yesterday", "kind": "design", "opened": now - 86_400},
+        ]}),
+    );
+    // Open in a tab, last viewed two hours ago.
+    u.app.run("file.new", json!({"name": "Open since this morning"}));
+    let uid = u.app.session.ds().unwrap().uid;
+    u.app.run("account.recentOpened", json!({"target": "TAB", "name": "Open since this morning", "tab": uid}));
+    u.app.session.account.recents.iter_mut().filter(|r| r.target == "TAB").for_each(|r| r.opened = now - 7_200);
+    u.app.ui.home = true;
+    let s = settle(&mut u);
+    let order = ["Ten minutes ago", "An hour ago", "Open since this morning", "Yesterday", "Last week"];
+    let ys: Vec<f32> = order
+        .iter()
+        .map(|name| texts(&s).iter().filter(|(t, at, _)| t == name && at.y > 200.0).map(|(_, at, _)| at.y).next().unwrap_or(f32::NAN))
+        .collect();
+    let xs: Vec<f32> = order
+        .iter()
+        .map(|name| texts(&s).iter().filter(|(t, at, _)| t == name && at.y > 200.0).map(|(_, at, _)| at.x).next().unwrap_or(f32::NAN))
+        .collect();
+    let place: Vec<(i32, i32)> = ys.iter().zip(&xs).map(|(y, x)| (*y as i32, *x as i32)).collect();
+    assert!(place.windows(2).all(|w| w[0] < w[1]), "newest first, row by row: {place:?}");
+    // Switching to the open file puts it first.
+    u.app.run("account.recentOpened", json!({"target": "TAB", "name": "Open since this morning", "tab": uid}));
+    let s = settle(&mut u);
+    let first = texts(&s)
+        .iter()
+        .filter(|(t, at, _)| order.contains(&t.as_str()) && at.y > 200.0)
+        .min_by(|a, b| (a.1.y, a.1.x).partial_cmp(&(b.1.y, b.1.x)).unwrap())
+        .map(|(t, ..)| t.clone());
+    assert_eq!(first.as_deref(), Some("Open since this morning"));
+}
