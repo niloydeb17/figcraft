@@ -439,6 +439,17 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if matches!(key, Key::Backspace | Key::Delete) && m.is_none() && app.ui.picker.is_some() && crate::handles::remove_selected_stop(app, ctx) {
         return true;
     }
+    // Animations (or a keyframe) selected in the motion timeline: Delete removes them, not the layer;
+    // Select all and Escape act on the timeline's animations while it has the keyboard.
+    if matches!(key, Key::Backspace | Key::Delete) && m.is_none() && crate::panels::motion_timeline::delete_selected(app, ctx) {
+        return true;
+    }
+    if key == Key::A && m.command && !m.shift && !m.alt && crate::panels::motion_timeline::select_all(app, ctx) {
+        return true;
+    }
+    if key == Key::Escape && crate::panels::motion_timeline::deselect(ctx) {
+        return true;
+    }
     // An interaction selected in the Prototype tab: Delete removes that interaction, not the component.
     if matches!(key, Key::Backspace | Key::Delete) && m.is_none() && crate::proto_panel::delete_selected_interaction(app, ctx) {
         return true;

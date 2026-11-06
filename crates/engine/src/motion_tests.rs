@@ -139,3 +139,97 @@ fn motion_survives_save_and_open() {
     assert_eq!(n.motion, s.doc().unwrap().node(rect).unwrap().motion);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// FigCraft's ready-made animations: twelve of each group, listed by `motion.styles`; each writes
+/// keyframes from the playhead in time order; Enter ends at the layer's rest, Exit starts there,
+/// Cycle starts and ends there (so it can repeat).
+#[test]
+fn every_ready_made_animation_starts_or_ends_at_rest_as_its_group_says() {
+    let listed = {
+        let (mut s, ..) = setup();
+        ex(&mut s, "motion.styles", json!({}))
+    };
+    let all = listed["styles"].as_array().unwrap().clone();
+    assert_eq!(all.len(), 36);
+    for g in ["enter", "cycle", "exit"] {
+        assert_eq!(all.iter().filter(|st| st["group"] == g).count(), 12, "{g}");
+    }
+    for st in &all {
+        let (mut s, _frame, rect) = setup();
+        ex(&mut s, "node.set", json!({"id": rect, "props": {"opacity": 0.8}}));
+        ex(&mut s, "motion.seek", json!({"time": 0.25}));
+        let id = st["id"].as_str().unwrap();
+        let r = ex(&mut s, "motion.style", json!({"ids": [rect], "style": id}));
+        assert!((r["start"].as_f64().unwrap() - 0.25).abs() < 1e-9, "{id}: from the playhead");
+        let d = st["duration"].as_f64().unwrap();
+        assert!(d > 0.0 && (r["end"].as_f64().unwrap() - (0.25 + d)).abs() < 1e-6, "{id}: {r}");
+        let n = s.doc().unwrap().node(rect).unwrap().clone();
+        let m = n.motion.as_ref().unwrap();
+        for (f, track) in m.fields() {
+            let ks = &track.keyframes;
+            assert!(ks.len() >= 2, "{id} {f:?}");
+            assert!(ks.windows(2).all(|w| w[0].time < w[1].time), "{id} {f:?}: in time order");
+            let rest = match f {
+                figcraft_doc::motion::MotionField::ScaleX | figcraft_doc::motion::MotionField::ScaleY => 1.0,
+                figcraft_doc::motion::MotionField::Opacity => 0.8,
+                _ => 0.0,
+            };
+            let first = ks[0].value.as_f64().unwrap();
+            let last = ks[ks.len() - 1].value.as_f64().unwrap();
+            // A whole turn looks the same as none.
+            let turn = matches!(f, figcraft_doc::motion::MotionField::Rotation);
+            let at_rest = |v: f64| {
+                let d = v - rest;
+                if turn { d.rem_euclid(360.0).min(360.0 - d.rem_euclid(360.0)) < 1e-6 } else { d.abs() < 1e-6 }
+            };
+            match st["group"].as_str().unwrap() {
+                "enter" => assert!(at_rest(last), "{id} {f:?} ends at rest: {last}"),
+                "exit" => assert!(at_rest(first), "{id} {f:?} starts at rest: {first}"),
+                _ => assert!(at_rest(first) && at_rest(last), "{id} {f:?} starts and ends at rest: {first}..{last}"),
+            }
+            assert!(ks.iter().all(|k| k.value.as_f64().is_some_and(f64::is_finite)));
+        }
+        // The timeline grew to hold it, and the layer is drawn at every moment.
+        assert!(s.doc().unwrap().timeline_duration(_frame) + 1e-9 >= 0.25 + d, "{id}");
+        let page = s.ds().unwrap().page;
+        for t in [0.0, 0.25, 0.25 + d / 2.0, 0.25 + d] {
+            assert!(s.ds().unwrap().doc.at_time(page, t).is_some(), "{id} at {t}");
+        }
+    }
+}
+
+#[test]
+fn a_ready_made_animation_by_name_and_undo_and_junk() {
+    let (mut s, _frame, rect) = setup();
+    ex(&mut s, "select.set", json!({"ids": [rect]}));
+    let r = ex(&mut s, "motion.style", json!({"style": "Rise", "start": 0}));
+    assert_eq!(r["style"], "rise");
+    assert_eq!(r["fields"], json!(["OPACITY", "TRANSLATION_Y"]));
+    ex(&mut s, "edit.undo", json!({}));
+    assert!(s.doc().unwrap().node(rect).unwrap().motion.as_ref().is_none_or(|m| m.fields().is_empty()), "undone");
+    assert!(s.execute("motion.style", &json!({"ids": [rect], "style": "nope"})).is_err());
+    assert!(s.execute("motion.style", &json!({"ids": [rect]})).is_err());
+    assert!(s.execute("motion.styles", &json!({"group": "sideways"})).is_err());
+    assert_eq!(ex(&mut s, "motion.styles", json!({"group": "cycle"}))["styles"].as_array().unwrap().len(), 12);
+}
+
+/// Several animations removed at once (the timeline's Delete): one undo step brings them back.
+#[test]
+fn several_tracks_go_in_one_undo_step() {
+    let (mut s, _frame, rect) = setup();
+    ex(&mut s, "motion.style", json!({"ids": [rect], "style": "burst", "start": 0}));
+    let before = s.doc().unwrap().node(rect).unwrap().motion.clone();
+    let r = ex(
+        &mut s,
+        "motion.tracks.remove",
+        json!({"tracks": [{"id": rect, "field": "SCALE_X"}, {"id": rect, "field": "SCALE_Y"}, {"id": rect, "field": "OPACITY"}, {"id": rect, "field": "ROTATION"}]}),
+    );
+    assert_eq!(r["removed"], 3, "the one not animated is skipped");
+    assert!(s.doc().unwrap().node(rect).unwrap().motion.as_ref().is_none_or(|m| m.fields().is_empty()));
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc().unwrap().node(rect).unwrap().motion, before);
+    assert!(s.execute("motion.tracks.remove", &json!({"tracks": [{"id": rect, "field": "OPACITY"}]})).is_ok());
+    assert!(s.execute("motion.tracks.remove", &json!({"tracks": [{"id": rect, "field": "OPACITY"}]})).is_err(), "nothing left");
+    assert!(s.execute("motion.tracks.remove", &json!({"tracks": "x"})).is_err());
+    assert!(s.execute("motion.tracks.remove", &json!({"tracks": [{"field": "OPACITY"}]})).is_err());
+}

@@ -69,15 +69,8 @@ pub(crate) fn panel(app: &mut FigApp, ui: &mut Ui) {
             d.insert_temp(open_id, !open);
         });
     }
-    if ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false) {
-        for (label, preset, timing) in STYLES {
-            row(ui, 28.0, |ui| {
-                if ui.add(egui::Button::new(egui::RichText::new(tr(label)).size(11.0)).frame(false)).clicked() {
-                    app.run("motion.preset", json!({"ids": sel, "preset": preset, "timing": timing}));
-                    ui.data_mut(|d| d.insert_temp(open_id, false));
-                }
-            });
-        }
+    if ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false) && style_picker(app, ui, &t, &sel) {
+        ui.data_mut(|d| d.insert_temp(open_id, false));
     }
     animated_list(app, ui, &t, &rest, id);
     widgets::separator(ui);
@@ -208,6 +201,70 @@ const STYLES: [(&str, &str, &str); 10] = [
     (crate::i18n::tr_noop("Opacity: fade in"), "opacity", "in"),
     (crate::i18n::tr_noop("Opacity: fade out"), "opacity", "out"),
 ];
+
+/// The picker's tabs: the basic animations, then FigCraft's ready-made Enter, Cycle and Exit ones.
+const PICKER_TABS: [&str; 4] =
+    [crate::i18n::tr_noop("Basic"), crate::i18n::tr_noop("Enter"), crate::i18n::tr_noop("Cycle"), crate::i18n::tr_noop("Exit")];
+
+/// The Add animation picker: a row of tabs, then the tab's animations, each named with how fast
+/// it is (the ready-made ones say what they do when hovered). True once one was added.
+fn style_picker(app: &mut FigApp, ui: &mut Ui, t: &Tokens, sel: &[NodeId]) -> bool {
+    use figcraft_doc::motion::styles::{Group, STYLES as READY_MADE, speed};
+    let tab_id = Id::unique("motion_panel_style_tab");
+    let mut tab = ui.data(|d| d.get_temp::<usize>(tab_id)).unwrap_or(1).min(PICKER_TABS.len() - 1);
+    row(ui, 30.0, |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (i, label) in PICKER_TABS.iter().enumerate() {
+            let on = i == tab;
+            let text = egui::RichText::new(tr(label)).size(11.0).color(if on { t.text } else { t.text_secondary });
+            let b = egui::Button::new(if on { text.strong() } else { text })
+                .fill(if on { t.hover } else { Color32::TRANSPARENT })
+                .stroke(Stroke::NONE)
+                .corner_radius(5.0)
+                .min_size(vec2(0.0, 22.0));
+            if ui.add(b).clicked() {
+                tab = i;
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(tab_id, tab));
+    let mut added = false;
+    let item = |ui: &mut Ui, label: &str, tag: &str, about: Option<&str>| -> bool {
+        let mut clicked = false;
+        row(ui, 26.0, |ui| {
+            let w = ui.available_width();
+            let (r, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+            let resp = match about {
+                Some(a) => resp.on_hover_text(tr(a)),
+                None => resp,
+            };
+            crate::a11y::named_button(&resp, label);
+            if resp.hovered() {
+                ui.painter().rect_filled(r, 5.0, t.hover);
+            }
+            let p = ui.painter();
+            p.text(pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), t.text);
+            p.text(pos2(r.right() - 8.0, r.center().y), egui::Align2::RIGHT_CENTER, tag, egui::FontId::proportional(11.0), t.text_tertiary);
+            clicked = resp.clicked();
+        });
+        clicked
+    };
+    if tab == 0 {
+        for (label, preset, timing) in STYLES {
+            if item(ui, tr(label), tr("Fast"), None) {
+                added |= app.run("motion.preset", json!({"ids": sel, "preset": preset, "timing": timing})).is_some();
+            }
+        }
+        return added;
+    }
+    let group = Group::ALL.get(tab - 1).copied().unwrap_or(Group::Enter);
+    for st in READY_MADE.iter().filter(|st| st.group == group) {
+        if item(ui, tr(st.name), tr(speed(st.duration())), Some(st.about)) {
+            added |= app.run("motion.style", json!({"ids": sel, "style": st.id})).is_some();
+        }
+    }
+    added
+}
 
 fn heading(ui: &mut Ui, t: &Tokens, name: &str) {
     let w = ui.available_width();

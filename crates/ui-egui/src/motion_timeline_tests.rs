@@ -96,3 +96,130 @@ fn the_ruler_counts_seconds_past_one() {
     assert!(labels.iter().any(|t| t == "1.2s"), "{labels:?}");
     assert_eq!(labels.iter().filter(|t| t.as_str() == "200ms").count(), 1, "{labels:?}");
 }
+
+fn click(u: &mut Ui, at: egui::Pos2, modifiers: Modifiers) {
+    u.frame_with(vec![Event::PointerMoved(at)], modifiers);
+    for pressed in [true, false] {
+        u.frame_with(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers }], modifiers);
+    }
+    u.frame(vec![]);
+}
+
+fn press(u: &mut Ui, key: egui::Key, modifiers: Modifiers) {
+    for pressed in [true, false] {
+        u.frame_with(vec![Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }], modifiers);
+    }
+    u.frame(vec![]);
+}
+
+fn fields(u: &Ui, id: NodeId) -> Vec<String> {
+    u.app.session.doc().unwrap().node(id).unwrap().motion.as_ref().map(|m| m.fields().into_iter().map(|(f, _)| f.key()).collect()).unwrap_or_default()
+}
+
+/// The rectangle with Scale X and Opacity animated, and the bars of both fields.
+fn two_fields() -> (Ui, NodeId, egui::Rect, egui::Rect) {
+    let (mut u, rect) = scaled();
+    for (time, value) in [(0.0, 0.0), (0.25, 1.0)] {
+        u.app.run("motion.keyframe.add", json!({"ids": [rect], "field": "OPACITY", "time": time, "value": value}));
+    }
+    let s = shapes(&mut u);
+    let mut field = bars(&s, egui::Color32::from_rgb(0xf0, 0xf7, 0xfe));
+    field.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    assert_eq!(field.len(), 2, "{field:?}");
+    (u, rect, field[0], field[1])
+}
+
+#[test]
+fn a_clicked_bar_is_selected_and_delete_removes_it_and_not_the_layer() {
+    let (mut u, rect, scale, _) = two_fields();
+    // Between the ticks, on the bar itself.
+    click(&mut u, egui::pos2(scale.left() + 30.0, scale.center().y), Modifiers::NONE);
+    let s = shapes(&mut u);
+    assert_eq!(bars(&s, egui::Color32::from_rgb(0xf0, 0xf7, 0xfe)).len(), 1, "the selected bar is filled");
+    press(&mut u, egui::Key::Delete, Modifiers::NONE);
+    assert_eq!(fields(&u, rect), ["OPACITY"]);
+    assert!(u.app.session.doc().unwrap().node(rect).is_some(), "the layer stays");
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(fields(&u, rect).len(), 2, "one undo brings it back");
+}
+
+#[test]
+fn shift_adds_a_bar_and_the_layer_bar_selects_all_of_its_animations() {
+    let (mut u, rect, scale, opacity) = two_fields();
+    click(&mut u, egui::pos2(scale.left() + 30.0, scale.center().y), Modifiers::NONE);
+    click(&mut u, egui::pos2(opacity.left() + 30.0, opacity.center().y), Modifiers::SHIFT);
+    press(&mut u, egui::Key::Backspace, Modifiers::NONE);
+    assert!(fields(&u, rect).is_empty(), "both went");
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(fields(&u, rect).len(), 2, "in one undo step");
+    // The layer's bar: all of them.
+    let s = shapes(&mut u);
+    let layer = bars(&s, egui::Color32::from_rgb(0x00, 0x7b, 0xe5))[0];
+    click(&mut u, egui::pos2(layer.left() + 30.0, layer.center().y), Modifiers::NONE);
+    press(&mut u, egui::Key::Delete, Modifiers::NONE);
+    assert!(fields(&u, rect).is_empty());
+}
+
+#[test]
+fn select_all_in_the_timeline_takes_every_animation_and_escape_lets_go() {
+    let (mut u, rect, scale, _) = two_fields();
+    let outlined = |u: &mut Ui| bars(&shapes(u), egui::Color32::from_rgb(0xf0, 0xf7, 0xfe)).len();
+    // A click on the track area's empty part gives the timeline the keyboard.
+    click(&mut u, egui::pos2(scale.right() + 200.0, scale.center().y), Modifiers::NONE);
+    press(&mut u, egui::Key::A, Modifiers::COMMAND);
+    assert_eq!(outlined(&mut u), 0, "both bars selected (filled)");
+    press(&mut u, egui::Key::Escape, Modifiers::NONE);
+    assert_eq!(outlined(&mut u), 2, "Escape lets go of them");
+    assert_eq!(fields(&u, rect).len(), 2);
+    press(&mut u, egui::Key::A, Modifiers::COMMAND);
+    press(&mut u, egui::Key::Delete, Modifiers::NONE);
+    assert!(fields(&u, rect).is_empty(), "select all, then delete");
+    assert!(u.app.session.doc().unwrap().node(rect).is_some(), "the layer stays");
+}
+
+/// A keyframe in the middle of a bar: the name moves to the widest gap, clear of every tick.
+#[test]
+fn a_bars_name_keeps_clear_of_its_ticks() {
+    let (mut u, rect) = scaled();
+    u.app.run("motion.keyframe.add", json!({"ids": [rect], "field": "SCALE_X", "time": 0.25, "value": 1.2}));
+    let s = shapes(&mut u);
+    let (_, at, size) =
+        texts(&s).into_iter().find(|(t, at, _)| t == "Scale X" && at.y > TIMELINE_TOP + 60.0 && at.x > 300.0).expect("the bar's name");
+    let ticks: Vec<egui::Rect> = s
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Rect(r) if (r.rect.width() - 1.5).abs() < 0.01 && (r.rect.height() - 9.0).abs() < 0.01 => Some(r.rect),
+            _ => None,
+        })
+        .filter(|r| r.center().y > at.y && r.center().y < at.y + size.y)
+        .collect();
+    assert_eq!(ticks.len(), 3, "{ticks:?}");
+    for t in ticks {
+        assert!(t.right() < at.x || t.left() > at.x + size.x, "tick {t:?} runs through the name at {at:?} {size:?}");
+    }
+}
+
+/// The timeline's end drags: shorter to the left, longer to the right, set when let go.
+#[test]
+fn dragging_the_timelines_end_changes_its_length() {
+    let (mut u, rect) = scaled();
+    let frame = u.app.session.doc().unwrap().top_level_frame(rect).unwrap();
+    let length = |u: &Ui| u.app.session.doc().unwrap().timeline_duration(frame);
+    let before = length(&u);
+    let s = shapes(&mut u);
+    // The 0 s and 1 s labels give the scale; the end sits at the timeline's length.
+    let label_x = |t: &str| texts(&s).into_iter().find(|(x, at, _)| x == t && at.y > TIMELINE_TOP).map(|(_, at, size)| at.x + size.x / 2.0).unwrap();
+    let (x0, x1) = (label_x("0s"), label_x("1s"));
+    let px = x1 - x0;
+    let end = egui::pos2(x0 + px * before as f32, TIMELINE_TOP + 120.0);
+    let to = egui::pos2(end.x - px * 0.5, end.y);
+    u.frame(vec![Event::PointerMoved(end)]);
+    u.frame(vec![Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+    for k in 1..=6 {
+        u.frame(vec![Event::PointerMoved(end + (to - end) * (k as f32 / 6.0))]);
+    }
+    u.frame(vec![Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+    u.frame(vec![]);
+    let after = length(&u);
+    assert!((after - (before - 0.5)).abs() < 0.03, "{before} → {after}");
+}

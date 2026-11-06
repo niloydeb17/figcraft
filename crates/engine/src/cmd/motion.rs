@@ -93,7 +93,28 @@ pub fn specs() -> Vec<CommandSpec> {
             remove_keyframe
         ),
         spec!("motion.track.remove", "Remove animation track", "{ids?, field} → {ids}  remove every keyframe of one field", true, remove_track),
+        spec!(
+            "motion.tracks.remove",
+            "Remove animations",
+            "{tracks: [{id, field}]} → {removed}  remove several layers' tracks at once (one undo step); tracks already gone are skipped",
+            true,
+            remove_tracks
+        ),
         spec!("motion.clear", "Remove animation", "{ids?} → {ids}  remove every keyframe from the layers", true, clear),
+        spec!(
+            "motion.styles",
+            "Animations",
+            "{group? (enter|cycle|exit)} → {styles: [{id, name, group, speed, duration, about}]}  FigCraft's ready-made animations, Enter, Cycle and Exit (motion.style applies one)",
+            false,
+            styles
+        ),
+        spec!(
+            "motion.style",
+            "Add animation",
+            "{ids?, style (an id or name from motion.styles, e.g. fade-up), start? (seconds; default the playhead)} → {ids, style, fields, start, end}  write a ready-made animation's keyframes from `start`, relative to each layer's rest (the timeline grows to fit)",
+            true,
+            apply_style
+        ),
         spec!(
             "motion.preset",
             "Apply animation style",
@@ -434,6 +455,33 @@ fn remove_track(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"ids": out}))
 }
 
+fn remove_tracks(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "motion.tracks.remove";
+    let Some(Value::Array(list)) = get(p, "tracks") else { return Err(bad(cmd, "`tracks` is a list of {id, field}")) };
+    if list.len() > 10_000 {
+        return Err(bad(cmd, "at most 10000 tracks at once"));
+    }
+    let mut wanted: Vec<(NodeId, MotionField)> = Vec::new();
+    for t in list {
+        let id: NodeId = t.get("id").cloned().and_then(|v| serde_json::from_value(v).ok()).ok_or_else(|| bad(cmd, "each track has a layer `id`"))?;
+        wanted.push((id, field(cmd, t)?));
+    }
+    let doc = s.doc_mut()?;
+    let mut removed = 0;
+    for (id, f) in wanted {
+        let Some(n) = doc.node(id) else { continue };
+        if n.motion.as_ref().is_some_and(|m| m.tracks.contains_key(&f.key())) {
+            doc.get_mut(id)?.motion.as_mut().and_then(|m| m.tracks.remove(&f.key()));
+            tidy(doc, id)?;
+            removed += 1;
+        }
+    }
+    if removed == 0 {
+        return Err(bad(cmd, "none of those tracks is animated"));
+    }
+    Ok(json!({"removed": removed}))
+}
+
 fn clear(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "motion.clear";
     let ids = req_targets(cmd, s, p)?;
@@ -508,6 +556,60 @@ fn preset(s: &mut Session, p: &Value) -> Result<Value> {
         extend_timeline(doc, *id, end)?;
     }
     Ok(json!({"ids": ids, "fields": fields, "start": start, "end": end}))
+}
+
+fn styles(_s: &mut Session, p: &Value) -> Result<Value> {
+    use figcraft_doc::motion::styles::{Group, STYLES, speed};
+    let cmd = "motion.styles";
+    let group = match string(p, "group") {
+        None => None,
+        Some(g) => Some(
+            Group::ALL
+                .into_iter()
+                .find(|x| x.id() == g.trim().to_ascii_lowercase())
+                .ok_or_else(|| bad(cmd, format!("`group`: enter, cycle or exit (got `{g}`)")))?,
+        ),
+    };
+    let list: Vec<Value> = STYLES
+        .iter()
+        .filter(|st| group.is_none_or(|g| st.group == g))
+        .map(|st| {
+            let d = st.duration();
+            json!({"id": st.id, "name": st.name, "group": st.group.id(), "speed": speed(d), "duration": d, "about": st.about})
+        })
+        .collect();
+    Ok(json!({"styles": list}))
+}
+
+fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "motion.style";
+    let ids = animatable(cmd, s, p)?;
+    let name = req_string(cmd, p, "style")?;
+    let style = figcraft_doc::motion::styles::find(&name).ok_or_else(|| bad(cmd, format!("`style`: `{name}` isn't one of motion.styles")))?;
+    let start = snap_time(num(p, "start").filter(|t| t.is_finite()).unwrap_or_else(|| playhead(s)).clamp(0.0, figcraft_doc::motion::MAX_TIMELINE));
+    let doc = s.doc_mut()?;
+    let mut fields = Vec::new();
+    let mut end = start;
+    for id in &ids {
+        let tracks = {
+            let n = doc.node(*id).ok_or(crate::EngineError::NoNode(*id))?;
+            style.tracks(n, start)
+        };
+        let n = doc.get_mut(*id)?;
+        let m = n.motion.get_or_insert_with(Default::default);
+        for (f, t) in tracks {
+            let track: &mut Track = m.track_mut(f);
+            for k in t.keyframes {
+                end = end.max(k.time);
+                track.set(k);
+            }
+            if !fields.contains(&f.key()) {
+                fields.push(f.key());
+            }
+        }
+        extend_timeline(doc, *id, end)?;
+    }
+    Ok(json!({"ids": ids, "style": style.id, "fields": fields, "start": start, "end": end}))
 }
 
 fn set_duration(s: &mut Session, p: &Value) -> Result<Value> {

@@ -138,6 +138,9 @@ fn dynamic_labels() -> Vec<&'static str> {
     v.extend(GESTURES.iter().flat_map(|(_, label, mac, other)| [*label, *mac, *other]));
     v.extend(DATA_LABELS);
     v.push(figcraft_engine::live::TOO_LARGE_TO_JOIN);
+    // The ready-made animations' names and descriptions, and how fast each reads.
+    v.extend(figcraft_doc::motion::styles::STYLES.iter().flat_map(|s| [s.name, s.about]));
+    v.extend(["Fast", "Medium", "Slow"]);
     // The starter templates' names, descriptions and kinds.
     v.extend(figcraft_engine::templates::TEMPLATES.iter().flat_map(|t| [t.name, t.description, t.kind.label()]));
     v

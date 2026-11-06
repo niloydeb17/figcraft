@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use crate::proto::Easing;
 use crate::{Document, Node, NodeId};
 
+pub mod styles;
+
 /// Length of a timeline nothing has set (seconds): the incumbent's timeline showed 2000 ms on
 /// frames whose length was never set.
 pub const DEFAULT_TIMELINE: f64 = 2.0;

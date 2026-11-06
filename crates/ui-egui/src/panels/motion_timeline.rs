@@ -226,8 +226,12 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
     let names = Rect::from_min_max(body.min, pos2(body.left() + names_w.clamp(160.0, (body.width() - 200.0).max(160.0)), body.bottom()));
     let lane = Rect::from_min_max(pos2(names.right(), body.top()), body.max);
     ui.painter().vline(names.right() + 0.5, body.y_range(), Stroke::new(1.0, lk.separator));
-    // The whole timeline fits the track area (the incumbent zooms to fit its length).
-    let px_per_sec = ((lane.width() - ORIGIN - END_PAD).max(40.0) / length.max(0.01) as f32).max(1.0);
+    // The whole timeline fits the track area (the incumbent zooms to fit its length); while its end
+    // is dragged the scale holds still and the length follows the pointer.
+    let resizing: Option<(f32, f64)> = ui.data(|d| d.get_temp(end_drag_id()));
+    let set_length = length;
+    let length = resizing.map_or(length, |(_, to)| to);
+    let px_per_sec = resizing.map_or_else(|| ((lane.width() - ORIGIN - END_PAD).max(40.0) / length.max(0.01) as f32).max(1.0), |(scale, _)| scale);
     let x_of = |s: f64| lane.left() + ORIGIN + s as f32 * px_per_sec;
     let t_of = |x: f32| (f64::from((x - lane.left() - ORIGIN) / px_per_sec)).clamp(0.0, length);
     let lane_painter = ui.painter().with_clip_rect(lane);
@@ -261,6 +265,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
     let clip_painter = ui.painter().with_clip_rect(rows_rect);
     let key_painter = ui.painter().with_clip_rect(rows_rect.intersect(lane));
     let scroll = (scroll / ROW_H).round() * ROW_H;
+    let geo = Geo { lane, px_per_sec, length };
+    let chosen = follow_choice(ui, full, rows_rect.intersect(lane), &rows);
+    let rc = RowCx { geo, lk: &lk, painter: key_painter.clone(), picked: picked.clone(), drag: drag.clone(), chosen };
     let mut y = rows_top - scroll;
     for (i, row) in rows.iter().enumerate() {
         // Only whole rows below the ruler (scrolling steps a row at a time).
@@ -299,7 +306,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
                 clip_painter.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, clip(name, 28), FontId::proportional(11.0), text);
                 add_field_menu(app, ui, Rect::from_min_size(pos2(names.right() - 24.0, r.top() + 2.0), vec2(20.0, 20.0)), *id, i);
                 if let Some((a, b)) = span {
-                    layer_bar(&key_painter, &lk, bar_rect(x_of(*a), x_of(*b), r), selected);
+                    let all: Vec<(NodeId, String)> = rows
+                        .iter()
+                        .filter_map(|row| match row {
+                            Row::Track { id: of, field, .. } if of == id => Some((*id, field.key())),
+                            _ => None,
+                        })
+                        .collect();
+                    layer_bar_row(app, ui, &rc, bar_rect(rc.geo.x_of(*a), rc.geo.x_of(*b), r), i, *id, &all, selected);
                 }
             }
             Row::Track { id, field, times } => {
@@ -314,82 +328,313 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, names_w: f32) {
                     FontId::proportional(11.0),
                     if row_selected { t.text } else { t.text_secondary },
                 );
-                // The field's bar from its first keyframe to its last (as dragged), named for it.
-                let shown: Vec<f64> = times
-                    .iter()
-                    .map(|(time, _)| {
-                        let me = Picked { id: *id, field: field.key(), time: *time };
-                        drag.as_ref().filter(|d| d.picked == me).map_or(*time, |d| d.to)
-                    })
-                    .collect();
-                let (lo, hi) = shown.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(*t), b.max(*t)));
-                let bar = (lo <= hi).then(|| bar_rect(x_of(lo), x_of(hi), r));
-                if let Some(bar) = bar {
-                    field_bar(&key_painter, &lk, bar, &field.label(), row_selected);
-                }
-                for (k, (time, hold)) in times.iter().enumerate() {
-                    let me = Picked { id: *id, field: field.key(), time: *time };
-                    let shown_t = shown.get(k).copied().unwrap_or(*time);
-                    // The first and last keyframes' ticks sit inside the bar's ends.
-                    let x = match bar {
-                        Some(bar) if shown_t <= lo => bar.left() + TICK_INSET,
-                        Some(bar) if shown_t >= hi => bar.right() - TICK_INSET,
-                        _ => x_of(shown_t),
-                    };
-                    let c = pos2(x.round(), r.center().y.round());
-                    if c.x < lane.left() - TICK_HIT || c.x > lane.right() + TICK_HIT {
-                        continue;
-                    }
-                    let hit = Rect::from_center_size(c, vec2(TICK_HIT, ROW_H)).intersect(lane);
-                    let resp = ui.interact(hit, Id::unique("motion_key").with((i, k)), Sense::click_and_drag()).on_hover_text(format!(
-                        "{} · {:.2}s",
-                        field.label(),
-                        time
-                    ));
-                    let is_picked = picked.as_ref() == Some(&me);
-                    if resp.clicked() || resp.drag_started() {
-                        ui.data_mut(|d| d.insert_temp(picked_id(), me.clone()));
-                        app.run("select.set", json!({"ids": [id]}));
-                        if resp.clicked() {
-                            app.run("motion.seek", json!({"time": time}));
-                        }
-                    }
-                    if resp.dragged()
-                        && let Some(p) = resp.interact_pointer_pos()
-                    {
-                        let to = figcraft_doc::motion::snap_time(t_of(p.x));
-                        ui.data_mut(|d| d.insert_temp(drag_id(), Drag { picked: me.clone(), to }));
-                    }
-                    if resp.drag_stopped() {
-                        if let Some(d) = drag.as_ref().filter(|d| d.picked == me && (d.to - me.time).abs() > 1e-9) {
-                            app.run("motion.keyframe.set", json!({"ids": [id], "field": me.field, "time": me.time, "newTime": d.to}));
-                            ui.data_mut(|m| m.insert_temp(picked_id(), Picked { time: d.to, ..me.clone() }));
-                        }
-                        ui.data_mut(|m| m.remove::<Drag>(drag_id()));
-                    }
-                    resp.context_menu(|ui| keyframe_menu(app, ui, &me));
-                    let color = if is_picked {
-                        lk.key_selected
-                    } else if resp.hovered() {
-                        lk.key_hover
-                    } else if row_selected {
-                        lk.clip_text
-                    } else {
-                        lk.clip_text_idle
-                    };
-                    key_tick(&key_painter, c, color, *hold);
-                    if is_picked {
-                        // A picked keyframe stands out: a wider tick.
-                        key_tick(&key_painter, c + vec2(-TICK_W, 0.0), color, *hold);
-                        key_tick(&key_painter, c + vec2(TICK_W, 0.0), color, *hold);
-                    }
-                }
+                track_row(app, ui, &rc, r, i, *id, *field, times, row_selected);
             }
         }
         y += ROW_H;
     }
 
+    if let Some(f) = frame {
+        end_handle(app, ui, &lk, Geo { lane, px_per_sec, length }, body.bottom(), (f, set_length));
+    }
     playhead(ui, &lk, lane, body.bottom(), x_of(player.playhead.min(length)).round() + 0.5);
+}
+
+fn end_drag_id() -> Id {
+    Id::unique("motion_timeline_end_drag")
+}
+
+/// The timeline's end, a line between its length and the greyed area after it: dragging it makes
+/// the timeline longer or shorter (`motion.timeline.duration` on frame `set.0`, whose length is
+/// `set.1`, when it is let go), snapped to 10 ms.
+fn end_handle(app: &mut FigApp, ui: &mut Ui, lk: &Look, geo: Geo, bottom: f32, set: (NodeId, f64)) {
+    let x = geo.x_of(geo.length).round() + 0.5;
+    if x < geo.lane.left() || x > geo.lane.right() + 4.0 {
+        return;
+    }
+    let grip = Rect::from_min_max(pos2(x - 4.0, geo.lane.top() + MARKER_H), pos2(x + 4.0, bottom));
+    let resp = ui.interact(grip, Id::unique("motion_timeline_end"), Sense::drag()).on_hover_text(tr("Drag to change the timeline's length"));
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        ui.painter().with_clip_rect(geo.lane.expand2(vec2(2.0, 0.0))).vline(x, (geo.lane.top() + MARKER_H)..=bottom, Stroke::new(2.0, lk.brand));
+    }
+    if resp.drag_started() {
+        ui.data_mut(|d| d.insert_temp(end_drag_id(), (geo.px_per_sec, set.1)));
+    }
+    if resp.dragged()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let raw = f64::from((p.x - geo.lane.left() - ORIGIN) / geo.px_per_sec);
+        let to = ((raw * 100.0).round() / 100.0).clamp(figcraft_doc::motion::MIN_TIMELINE, figcraft_doc::motion::MAX_TIMELINE);
+        ui.data_mut(|d| d.insert_temp(end_drag_id(), (geo.px_per_sec, to)));
+    }
+    if resp.drag_stopped() {
+        if (geo.length - set.1).abs() > 1e-9 {
+            app.run("motion.timeline.duration", json!({"id": set.0, "seconds": geo.length}));
+        }
+        ui.data_mut(|d| d.remove::<(f32, f64)>(end_drag_id()));
+    }
+}
+
+/// Where the timeline's seconds sit across the track area.
+#[derive(Clone, Copy)]
+struct Geo {
+    lane: Rect,
+    px_per_sec: f32,
+    length: f64,
+}
+
+impl Geo {
+    fn x_of(self, s: f64) -> f32 {
+        self.lane.left() + ORIGIN + s as f32 * self.px_per_sec
+    }
+
+    fn t_of(self, x: f32) -> f64 {
+        f64::from((x - self.lane.left() - ORIGIN) / self.px_per_sec).clamp(0.0, self.length)
+    }
+}
+
+/// What every row of the track area draws with.
+struct RowCx<'a> {
+    geo: Geo,
+    lk: &'a Look,
+    painter: egui::Painter,
+    picked: Option<Picked>,
+    drag: Option<Drag>,
+    /// The animations (a layer and a field's key) selected in the timeline.
+    chosen: Vec<(NodeId, String)>,
+}
+
+fn chosen_id() -> Id {
+    Id::unique("motion_timeline_chosen")
+}
+
+/// The timeline was clicked last (so Delete, Escape and Select all act on its animations).
+fn focus_id() -> Id {
+    Id::unique("motion_timeline_focus")
+}
+
+/// The animations selected in the timeline, kept to those still shown in `rows`: a click on the
+/// track area's background clears them and gives the timeline the keyboard; a click outside the
+/// timeline (`full`) clears them and hands the keyboard back.
+fn follow_choice(ui: &Ui, full: Rect, area: Rect, rows: &[Row]) -> Vec<(NodeId, String)> {
+    let shown: Vec<(NodeId, String)> = rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Track { id, field, .. } => Some((*id, field.key())),
+            Row::Layer { .. } => None,
+        })
+        .collect();
+    let mut chosen: Vec<(NodeId, String)> = ui.data(|d| d.get_temp(chosen_id())).unwrap_or_default();
+    chosen.retain(|c| shown.contains(c));
+    let pressed_at = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+    if let Some(p) = pressed_at {
+        let inside = full.contains(p);
+        ui.data_mut(|d| d.insert_temp(focus_id(), inside));
+        if !inside {
+            chosen.clear();
+        }
+    }
+    // Under the bars (they take their own clicks): the empty track area.
+    if ui.interact(area, Id::unique("motion_rows_bg"), Sense::click()).clicked() {
+        chosen.clear();
+        ui.data_mut(|d| d.remove::<Picked>(picked_id()));
+    }
+    ui.data_mut(|d| d.insert_temp(chosen_id(), chosen.clone()));
+    chosen
+}
+
+/// Select `tracks`: instead of what was selected, or (`add`, Shift held) toggled in with it.
+fn choose(ui: &Ui, tracks: &[(NodeId, String)], add: bool) {
+    let mut chosen: Vec<(NodeId, String)> = if add { ui.data(|d| d.get_temp(chosen_id())).unwrap_or_default() } else { Vec::new() };
+    if add && !tracks.is_empty() && tracks.iter().all(|t| chosen.contains(t)) {
+        chosen.retain(|c| !tracks.contains(c));
+    } else {
+        for t in tracks {
+            if !chosen.contains(t) {
+                chosen.push(t.clone());
+            }
+        }
+    }
+    ui.data_mut(|d| {
+        d.insert_temp(chosen_id(), chosen);
+        d.insert_temp(focus_id(), true);
+        d.remove::<Picked>(picked_id());
+    });
+}
+
+fn focused(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(focus_id())).unwrap_or(false)
+}
+
+/// Delete or Backspace in the timeline: the selected animations go (one undo step), or else the
+/// picked keyframe. False when the timeline doesn't have the keyboard or nothing is selected.
+pub fn delete_selected(app: &mut FigApp, ctx: &egui::Context) -> bool {
+    if !app.session.ds().is_ok_and(|d| d.motion.panel) || !focused(ctx) {
+        return false;
+    }
+    let chosen: Vec<(NodeId, String)> = ctx.data(|d| d.get_temp(chosen_id())).unwrap_or_default();
+    if !chosen.is_empty() {
+        let tracks: Vec<serde_json::Value> = chosen.iter().map(|(id, field)| json!({"id": id, "field": field})).collect();
+        app.run("motion.tracks.remove", json!({"tracks": tracks}));
+        ctx.data_mut(|d| d.remove::<Vec<(NodeId, String)>>(chosen_id()));
+        return true;
+    }
+    let Some(pk) = ctx.data(|d| d.get_temp::<Picked>(picked_id())) else { return false };
+    app.run("motion.keyframe.remove", json!({"ids": [pk.id], "field": pk.field, "time": pk.time}));
+    ctx.data_mut(|d| d.remove::<Picked>(picked_id()));
+    true
+}
+
+/// Select all (Cmd/Ctrl+A) in the timeline: every animation it shows. False when it doesn't
+/// have the keyboard.
+pub fn select_all(app: &mut FigApp, ctx: &egui::Context) -> bool {
+    if !app.session.ds().is_ok_and(|d| d.motion.panel) || !focused(ctx) {
+        return false;
+    }
+    let Ok(ds) = app.session.ds() else { return false };
+    let rows = rows_of(&ds.doc, current_frame(&app.session), &ds.selection);
+    let all: Vec<(NodeId, String)> = rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Track { id, field, .. } => Some((*id, field.key())),
+            Row::Layer { .. } => None,
+        })
+        .collect();
+    ctx.data_mut(|d| {
+        d.insert_temp(chosen_id(), all);
+        d.remove::<Picked>(picked_id());
+    });
+    true
+}
+
+/// Escape in the timeline: the selected animations (or picked keyframe) are let go.
+pub fn deselect(ctx: &egui::Context) -> bool {
+    if !focused(ctx) {
+        return false;
+    }
+    let had = ctx.data(|d| d.get_temp::<Vec<(NodeId, String)>>(chosen_id())).is_some_and(|c| !c.is_empty())
+        || ctx.data(|d| d.get_temp::<Picked>(picked_id())).is_some();
+    ctx.data_mut(|d| {
+        d.remove::<Vec<(NodeId, String)>>(chosen_id());
+        d.remove::<Picked>(picked_id());
+    });
+    had
+}
+
+/// A layer's bar, which selects all of its animations when clicked (Shift: with the others).
+#[allow(clippy::too_many_arguments)]
+fn layer_bar_row(app: &mut FigApp, ui: &mut Ui, rc: &RowCx, bar: Rect, i: usize, id: NodeId, all: &[(NodeId, String)], selected: bool) {
+    let on = !all.is_empty() && all.iter().all(|k| rc.chosen.contains(k));
+    layer_bar(&rc.painter, rc.lk, bar, selected, on);
+    let resp = ui.interact(bar.intersect(rc.geo.lane), Id::unique("motion_layer_bar").with(i), Sense::click());
+    if resp.clicked() {
+        choose(ui, all, ui.input(|i| i.modifiers.shift));
+        app.run("select.set", json!({"ids": [id]}));
+    }
+}
+
+/// One field's row in the track area: its bar (a click selects it, Shift adds it) and a tick per
+/// keyframe (a click picks it and moves the playhead there, a drag moves it).
+#[allow(clippy::too_many_arguments)]
+fn track_row(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    rc: &RowCx,
+    r: Rect,
+    i: usize,
+    id: NodeId,
+    field: MotionField,
+    times: &[(f64, bool)],
+    row_selected: bool,
+) {
+    let (geo, lk) = (rc.geo, rc.lk);
+    let key = field.key();
+    // The bar from the first keyframe to the last (as dragged).
+    let shown: Vec<f64> = times
+        .iter()
+        .map(|(time, _)| {
+            let me = Picked { id, field: key.clone(), time: *time };
+            rc.drag.as_ref().filter(|d| d.picked == me).map_or(*time, |d| d.to)
+        })
+        .collect();
+    let (lo, hi) = shown.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(*t), b.max(*t)));
+    let bar = (lo <= hi).then(|| bar_rect(geo.x_of(lo), geo.x_of(hi), r));
+    // Each tick's x: the first and last keyframes' sit inside the bar's ends.
+    let tick_xs: Vec<f32> = shown
+        .iter()
+        .map(|t| match bar {
+            Some(bar) if *t <= lo => bar.left() + TICK_INSET,
+            Some(bar) if *t >= hi => bar.right() - TICK_INSET,
+            _ => geo.x_of(*t),
+        })
+        .collect();
+    let chosen = rc.chosen.iter().any(|(cid, f)| *cid == id && *f == key);
+    if let Some(bar) = bar {
+        field_bar(&rc.painter, lk, bar, &field.label(), BarState { layer_selected: row_selected, chosen }, &tick_xs);
+        let resp = ui.interact(bar.intersect(geo.lane), Id::unique("motion_field_bar").with(i), Sense::click());
+        if resp.clicked() {
+            choose(ui, &[(id, key.clone())], ui.input(|i| i.modifiers.shift));
+            app.run("select.set", json!({"ids": [id]}));
+        }
+    }
+    for (k, (time, hold)) in times.iter().enumerate() {
+        let me = Picked { id, field: key.clone(), time: *time };
+        let x = tick_xs.get(k).copied().unwrap_or_else(|| geo.x_of(*time));
+        let c = pos2(x.round(), r.center().y.round());
+        if c.x < geo.lane.left() - TICK_HIT || c.x > geo.lane.right() + TICK_HIT {
+            continue;
+        }
+        let hit = Rect::from_center_size(c, vec2(TICK_HIT, ROW_H)).intersect(geo.lane);
+        let resp = ui.interact(hit, Id::unique("motion_key").with((i, k)), Sense::click_and_drag()).on_hover_text(format!(
+            "{} · {:.2}s",
+            field.label(),
+            time
+        ));
+        let is_picked = rc.picked.as_ref() == Some(&me);
+        if resp.clicked() || resp.drag_started() {
+            ui.data_mut(|d| {
+                d.insert_temp(picked_id(), me.clone());
+                d.insert_temp(focus_id(), true);
+                d.remove::<Vec<(NodeId, String)>>(chosen_id());
+            });
+            app.run("select.set", json!({"ids": [id]}));
+            if resp.clicked() {
+                app.run("motion.seek", json!({"time": time}));
+            }
+        }
+        if resp.dragged()
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            let to = figcraft_doc::motion::snap_time(geo.t_of(p.x));
+            ui.data_mut(|d| d.insert_temp(drag_id(), Drag { picked: me.clone(), to }));
+        }
+        if resp.drag_stopped() {
+            if let Some(d) = rc.drag.as_ref().filter(|d| d.picked == me && (d.to - me.time).abs() > 1e-9) {
+                app.run("motion.keyframe.set", json!({"ids": [id], "field": me.field, "time": me.time, "newTime": d.to}));
+                ui.data_mut(|m| m.insert_temp(picked_id(), Picked { time: d.to, ..me.clone() }));
+            }
+            ui.data_mut(|m| m.remove::<Drag>(drag_id()));
+        }
+        resp.context_menu(|ui| keyframe_menu(app, ui, &me));
+        let color = if chosen {
+            lk.bar_tick
+        } else if is_picked {
+            lk.key_selected
+        } else if resp.hovered() {
+            lk.key_hover
+        } else if row_selected {
+            lk.clip_text
+        } else {
+            lk.clip_text_idle
+        };
+        key_tick(&rc.painter, c, color, *hold);
+        if is_picked {
+            // A picked keyframe stands out: a wider tick.
+            key_tick(&rc.painter, c + vec2(-TICK_W, 0.0), color, *hold);
+            key_tick(&rc.painter, c + vec2(TICK_W, 0.0), color, *hold);
+        }
+    }
 }
 
 /// The timeline's rows: the frame's animated layers, then selected layers in it that aren't
@@ -495,24 +740,53 @@ fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>()) } else { s.to_string() }
 }
 
-/// A layer's bar: the span its animation covers, solid, with a tick inside each end.
-fn layer_bar(p: &egui::Painter, lk: &Look, bar: Rect, selected: bool) {
-    p.rect_filled(bar, CornerRadius::same(BAR_RADIUS), if selected { lk.bar } else { lk.bar_idle });
+/// A layer's bar: the span its animation covers, solid, with a tick inside each end; ringed when
+/// all its animations are selected.
+fn layer_bar(p: &egui::Painter, lk: &Look, bar: Rect, selected: bool, chosen: bool) {
+    p.rect_filled(bar, CornerRadius::same(BAR_RADIUS), if selected || chosen { lk.bar } else { lk.bar_idle });
+    if chosen {
+        p.rect_stroke(bar.expand(1.0), CornerRadius::same(BAR_RADIUS + 1), Stroke::new(1.5, lk.key_selected), egui::StrokeKind::Outside);
+    }
     for x in [bar.left() + TICK_INSET, bar.right() - TICK_INSET] {
         key_tick(p, pos2(x, bar.center().y), lk.bar_tick, false);
     }
 }
 
-/// A field's bar: outlined, its name in the middle (when there is room beside the end ticks).
-fn field_bar(p: &egui::Painter, lk: &Look, bar: Rect, label: &str, selected: bool) {
-    let (fill, edge, text) =
-        if selected { (lk.clip_fill, lk.clip_stroke, lk.clip_text) } else { (lk.clip_fill_idle, lk.clip_stroke_idle, lk.clip_text_idle) };
+/// How a field's bar shows: its layer selected, the bar itself selected.
+#[derive(Clone, Copy)]
+struct BarState {
+    layer_selected: bool,
+    chosen: bool,
+}
+
+/// A field's bar: outlined (filled when selected), its name in the widest gap between its keyframe
+/// ticks (`tick_xs`), so no tick runs through it; left out where no gap has room.
+fn field_bar(p: &egui::Painter, lk: &Look, bar: Rect, label: &str, st: BarState, tick_xs: &[f32]) {
+    let (fill, edge, text) = if st.chosen {
+        (lk.bar, lk.bar, lk.bar_tick)
+    } else if st.layer_selected {
+        (lk.clip_fill, lk.clip_stroke, lk.clip_text)
+    } else {
+        (lk.clip_fill_idle, lk.clip_stroke_idle, lk.clip_text_idle)
+    };
     p.rect_filled(bar, CornerRadius::same(BAR_RADIUS), fill);
     p.rect_stroke(bar, CornerRadius::same(BAR_RADIUS), Stroke::new(1.0, edge), egui::StrokeKind::Inside);
-    let room = bar.shrink2(vec2(TICK_INSET + 6.0, 0.0));
-    if room.width() > 16.0 {
-        p.with_clip_rect(room.intersect(p.clip_rect())).text(bar.center(), Align2::CENTER_CENTER, label, FontId::proportional(11.0), text);
+    let galley = p.layout_no_wrap(label.to_string(), FontId::proportional(11.0), text);
+    let mut xs: Vec<f32> = tick_xs.iter().copied().filter(|x| x.is_finite()).collect();
+    xs.push(bar.left() + TICK_INSET);
+    xs.push(bar.right() - TICK_INSET);
+    xs.sort_by(f32::total_cmp);
+    let gap = xs.windows(2).filter_map(|w| match w {
+        [a, b] => Some((*a, *b)),
+        _ => None,
+    });
+    let Some((a, b)) = gap.max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0))) else { return };
+    // Room for the name and a little air either side of it.
+    if b - a - 12.0 < galley.size().x {
+        return;
     }
+    let at = pos2(((a + b) / 2.0 - galley.size().x / 2.0).round(), bar.center().y - galley.size().y / 2.0);
+    p.with_clip_rect(bar.intersect(p.clip_rect())).galley(at, galley, text);
 }
 
 /// A bar in row `r` from `x0` to `x1` (at least [`BAR_MIN`] wide, about its middle).
@@ -713,27 +987,40 @@ fn picked_editor(app: &mut FigApp, ui: &mut Ui, pk: &Picked) {
     };
     crate::widgets::separator(ui);
     crate::widgets::section_header(ui, tr("Keyframe"), &[], false);
+    // Stacked to the panel's width: one wide row pushed the panel's contents sideways.
+    let inner = (ui.available_width() - 32.0).max(80.0);
     ui.horizontal(|ui| {
         ui.add_space(16.0);
-        ui.label(egui::RichText::new(format!("{} · {:.0}ms", field.label(), k.time * 1000.0)).size(11.0).color(t.text_secondary));
-        if let MotionValue::Float(mut v) = k.value {
+        ui.allocate_ui_with_layout(vec2(inner, 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if icons::button(ui, Icon::Minus, 24.0, false, tr("Delete")).clicked() {
+                app.run("motion.keyframe.remove", json!({"ids": [pk.id], "field": pk.field, "time": pk.time}));
+                ui.data_mut(|d| d.remove::<Picked>(picked_id()));
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let text = format!("{} · {:.0}ms", field.label(), k.time * 1000.0);
+                ui.add(egui::Label::new(egui::RichText::new(text).size(11.0).color(t.text_secondary)).truncate());
+            });
+        });
+    });
+    if let MotionValue::Float(mut v) = k.value {
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
             let speed = if field == MotionField::Opacity { 0.01 } else { 1.0 };
-            if ui.add(egui::DragValue::new(&mut v).speed(speed).max_decimals(2)).changed() {
+            if ui.add_sized(vec2(inner, 22.0), egui::DragValue::new(&mut v).speed(speed).max_decimals(2)).changed() {
                 app.run("motion.keyframe.set", json!({"ids": [pk.id], "field": pk.field, "time": pk.time, "value": v}));
             }
-        }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(16.0);
         let current = easing_name(k.easing, k.hold);
-        craft_ui::ComboBox::from_id_salt("motion_easing").selected_text(easing_label(k.easing, k.hold)).width(130.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("motion_easing").selected_text(easing_label(k.easing, k.hold)).width(inner).show_ui(ui, |ui| {
             for (name, label) in EASINGS {
                 if ui.selectable_label(current == name, tr(label)).clicked() {
                     app.run("motion.keyframe.set", json!({"ids": [pk.id], "field": pk.field, "time": pk.time, "easing": name}));
                 }
             }
         });
-        if ui.button(tr("Delete")).clicked() {
-            app.run("motion.keyframe.remove", json!({"ids": [pk.id], "field": pk.field, "time": pk.time}));
-            ui.data_mut(|d| d.remove::<Picked>(picked_id()));
-        }
     });
 }
 
