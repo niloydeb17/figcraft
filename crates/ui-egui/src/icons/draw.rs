@@ -1100,6 +1100,19 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(5.5, 14.5), (5.5, 11.5), (7.5, 11.5), (7.5, 14.5)], false);
             p.poly(&[(9.5, 7.5), (12.5, 7.5), (12.5, 14.5), (9.5, 14.5)], false);
         }
+        Globe => {
+            // The rim, the equator, and a meridian bowed out each side of the axis.
+            p.circle(8.0, 8.0, 6.0);
+            p.line(2.0, 8.0, 14.0, 8.0);
+            p.arc(13.5, 8.0, 8.14, 2.31, 3.97);
+            p.arc(2.5, 8.0, 8.14, -0.83, 0.83);
+        }
+        MoveToFolder => {
+            // The folder's outline (its tab on the top left), open at the top right for the arrow.
+            p.poly(&[(10.0, 4.5), (13.5, 4.5), (13.5, 13.5), (2.5, 13.5), (2.5, 2.5), (6.0, 2.5), (7.5, 4.5)], false);
+            p.line(8.0, 12.0, 8.0, 6.5);
+            p.head((8.0, 6.5), -FRAC_PI_2, 3.0);
+        }
         SignOut => {
             // The door frame, open on the right where the arrow leaves it.
             p.poly(&[(9.5, 5.0), (9.5, 2.5), (2.5, 2.5), (2.5, 13.5), (9.5, 13.5), (9.5, 11.0)], false);

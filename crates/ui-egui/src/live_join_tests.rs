@@ -100,27 +100,28 @@ fn the_browser_shares_through_a_server_but_does_not_host() {
     h.app.session.live.install(Box::new(Browser));
     assert!(!h.app.session.live.can_host());
     assert_eq!(h.app.session.execute("collab.peers", &json!({})).unwrap()["canHost"], false);
-    // Without a server there is nothing to share through: the join field is right there, with
-    // what the browser can reach.
+    // Without a server there is nothing to share through: the dialog says so, and More joins.
     h.app.session.execute("pref.publishServer", &json!({"url": ""})).unwrap();
     let shapes = h.frames(3);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Online sharing is off: no server is set in Preferences. Here you can join a shared file."));
-    assert!(!has_text(&shapes, "Start sharing") && !has_text(&shapes, "Local network"));
-    assert!(has_text(&shapes, "Join with a code") && has_text(&shapes, "Join"));
-    assert!(has_text(
-        &shapes,
-        "In the browser you can join sessions the desktop app hosts and files on a FigCraft server. A page opened over https reaches other computers only through wss:// links (a server behind TLS)."
-    ));
-    // With one, it shares online only (the local network needs a page that can listen).
+    assert!(has_text(&shapes, "Online sharing is off: no server is set in Preferences. More has the local network and joining a file."));
+    assert!(!has_text(&shapes, "Copy link"), "no link to give");
+    h.click(text_center(&shapes, "More"));
+    let shapes = h.frames(2);
+    assert!(has_text(&shapes, "Join a file with a code or link…"));
+    assert!(!has_text(&shapes, "Share on the local network"), "a page can't listen");
+    for pressed in [true, false] {
+        h.frame(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() }]);
+    }
+    // With one, Copy link puts the file on it first.
     h.app.session.execute("pref.publishServer", &json!({"url": "ws://127.0.0.1:47910/"})).unwrap();
     let shapes = h.frames(2);
-    assert!(!has_text(&shapes, "Local network") && !has_text(&shapes, "Online"));
-    h.click(text_center(&shapes, "Start sharing"));
+    h.click(text_center(&shapes, "Copy link"));
     h.frames(1);
     let live = h.app.session.live();
     assert_eq!((live.status.clone(), live.server.as_str()), (Status::Connecting, "ws://127.0.0.1:47910/"), "publishing to the server");
+    assert_eq!(h.app.ui.live.share.pending, Some(crate::live::share::Pending::CopyLink), "the link is copied once it is there");
     // Publish to server… opens its dialog here too.
     crate::menus::invoke(&mut h.app, "collab.publish");
     assert!(h.app.ui.live.publish.is_some());

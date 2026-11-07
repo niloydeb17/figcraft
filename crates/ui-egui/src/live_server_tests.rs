@@ -1,5 +1,5 @@
 //! Files on a server in the window: the Publish to server dialog (from the File menu and the
-//! Share popover; its field takes the keyboard; Escape closes it; publishing leaves the tab
+//! Share dialog's More; its field takes the keyboard; Escape closes it; publishing leaves the tab
 //! read-only until the file is there; a server open to the public takes it without a key and the
 //! owner token shows once), the Share popover's address, access, a published file's links, where
 //! it is hosted, when it expires and reporting it, and a view link's "View only" badge with only
@@ -63,9 +63,8 @@ fn the_publish_dialog() {
     let shapes = h.frames(2);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
-    h.click(text_center(&shapes, "Advanced"));
+    h.click(text_center(&shapes, "More"));
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Another server, or one that needs its key. The usual server is set in Preferences."));
     h.click(text_center(&shapes, "Publish to another server…"));
     let shapes = h.frames(2);
     assert!(has_text(
@@ -196,14 +195,26 @@ fn a_published_file_shows_its_links() {
     let shapes = h.frames(2);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Published · nobody else here yet"));
-    assert!(has_text(&shapes, "127.0.0.1:47900 · Can edit"));
-    assert!(has_text(&shapes, "Edit link") && has_text(&shapes, "View link"));
-    assert!(has_text(&shapes, "Leave session"));
+    assert!(has_text(&shapes, "Who has access") && has_text(&shapes, "Ada") && has_text(&shapes, "(you)") && has_text(&shapes, "can edit"));
+    assert!(has_text(&shapes, "Copy link") && has_text(&shapes, "Copy Dev Mode link"));
     assert!(!has_text(&shapes, "Owner token"), "the owner token showed once, not here");
+    h.click(text_center(&shapes, "Copy link"));
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Link copied"));
+    // Where it is hosted waits under More ▸ About this server; its two links are there too.
+    let shapes = h.frames(2);
+    assert!(!has_text(&shapes, "Hosted by abuse@example.com"));
+    h.click(text_center(&shapes, "More"));
+    let shapes = h.frames(2);
+    for t in ["Copy edit link", "Copy view link", "About this server", "Report this file…", "Leave file"] {
+        assert!(has_text(&shapes, t), "More has {t:?}");
+    }
+    h.click(text_center(&shapes, "About this server"));
+    let shapes = h.frames(2);
     // Where it is hosted, when it expires, and reporting it to the operator.
     assert!(has_text(&shapes, "Hosted by abuse@example.com") && has_text(&shapes, "Terms"));
     assert!(has_text(&shapes, "The server deletes this file if nobody opens it before 2027-01-15 08:00 UTC."));
+    h.click(text_center(&shapes, "More"));
+    let shapes = h.frames(2);
     h.click(text_center(&shapes, "Report this file…"));
     let shapes = h.frames(2);
     assert!(has_text(&shapes, "What is wrong with this file? The server's operator gets your report."));
@@ -231,10 +242,12 @@ fn a_view_link_shows_the_badge_and_only_the_moving_tools() {
     let shapes = h.frames(1);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "127.0.0.1:47900 · View only"));
+    assert!(has_text(&shapes, "Ada") && has_text(&shapes, "can view"));
     assert!(has_text(&shapes, "View only: you see every change as it happens but can't edit. Leave to keep a copy you can edit."));
-    // Leaving: the copy is yours, the full toolbar is back.
-    h.click(text_center(&shapes, "Leave session"));
+    // Leaving (More ▸ Leave file): the copy is yours, the full toolbar is back.
+    h.click(text_center(&shapes, "More"));
+    let shapes = h.frames(2);
+    h.click(text_center(&shapes, "Leave file"));
     let shapes = h.frames(2);
     assert!(!has_text(&shapes, "View only"));
     assert!(h.app.session.execute("tool.set", &json!({"tool": "rectangle"})).is_ok());
@@ -260,6 +273,6 @@ fn a_comment_link_shows_its_badge_and_leaves_the_comment_tool() {
     let shapes = h.frames(1);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "127.0.0.1:47900 · Can comment"));
+    assert!(has_text(&shapes, "Ada") && has_text(&shapes, "can comment"));
     assert!(has_text(&shapes, "Can comment: you see every change as it happens and can comment, but can't edit. Leave to keep a copy you can edit."));
 }

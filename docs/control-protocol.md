@@ -267,10 +267,10 @@ session of the window's active file as the window shows it (sessions are per fil
 shows its own, or `status: "off"`): `session` (its id, null when the file isn't in one),
 `sessions` (how many the app has running), `status`, `role`, the number of `peers`, who you `follow`, the
 peers whose cursors are drawn on the canvas (`cursorsShown`), whether the Join and Publish to
-server dialogs are open (`joinDialog`, `publishDialog`; Escape closes them), the join code the
-Share popover shows (`code`, with `share: {via, access}`; null when the file isn't shared with
-one), what is typed in the popover's and the home screen's join field (`joinField`), whether the
-popover has Local network chosen and Advanced open (`local`, `advanced`), and why the active
+server dialogs are open (`joinDialog`, `publishDialog`; Escape closes them), the join code of the
+open file's share (`code`, with `share: {via, access}`; null when the file isn't shared with
+one), whether the Share dialog is open (`shareDialog`) and how many people it lists as invited by
+email (`invited`), and why the active
 document can't be edited now (`readOnly`: the "View only", "Can comment" or "Publishing" reason, else null); the
 session itself is `engine.execute {command: "collab.peers"}` (sharing with a join code, hosting,
 joining and publishing are `collab.share`, `collab.host`, `collab.join` and `collab.publish`, opening invite links `collab.registerLinks`,

@@ -226,10 +226,53 @@ impl Share {
     }
 }
 
+/// The link or code a browser build's address names (`http(s)://…#file=…` or `#join=…`, escaped),
+/// unescaped; `None` for anything else (or a fragment that names another web address, which would
+/// go round again).
+pub fn web_address_target(typed: &str) -> Option<String> {
+    let lower = typed.get(..8).unwrap_or(typed).to_ascii_lowercase();
+    if !lower.starts_with("https://") && !lower.starts_with("http://") {
+        return None;
+    }
+    let (_, fragment) = typed.split_once('#')?;
+    let value = fragment.split('&').find_map(|kv| kv.strip_prefix("file=").or_else(|| kv.strip_prefix("join=")))?;
+    // `join=` takes the rest of the fragment (a pasted link keeps its own `&`s).
+    let value = match fragment.find("join=") {
+        Some(i) if !fragment.starts_with("file=") => fragment.get(i + "join=".len()..).unwrap_or(value),
+        _ => value,
+    };
+    let inner = unescape(value)?;
+    let inner = inner.trim();
+    (!inner.is_empty() && inner.len() <= 4096 && !inner.contains("http://") && !inner.contains("https://")).then(|| inner.to_string())
+}
+
+/// `%`-escapes undone (`None` for a broken escape or bytes that aren't UTF-8).
+fn unescape(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        if c == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// What someone typed to join, as what the link joins: an invite link as it is, a local network
-/// code as the link it stands for, an online code with `server` to ask about it.
+/// code as the link it stands for, an online code with `server` to ask about it, and a file's
+/// address in a browser build (`https://…/#file=<link or code>` or `#join=…`, what Copy link gives)
+/// as the link or code it names.
 pub fn join_target(server: &str, typed: &str) -> std::result::Result<String, String> {
     let typed = typed.trim();
+    if let Some(inner) = web_address_target(typed) {
+        return join_target(server, &inner);
+    }
     if typed.contains("://") || typed.contains('?') {
         return Ok(typed.to_string());
     }
@@ -310,6 +353,10 @@ pub enum NetRequest {
     /// Ask the server at `server` about its hosting and, with a file's owner token, manage that
     /// file ([`LiveLink::hosting`]).
     Hosting { server: String, file: String, owner: String, req: Option<Admin> },
+    /// Several requests about `file` on the server at `server`, with its `owner` token, on one
+    /// connection, in order ([`LiveLink::admin`]): what the Share dialog changes at once (a server
+    /// limits how many connections an address opens a minute).
+    Admin { server: String, file: String, owner: String, reqs: Vec<Admin> },
 }
 
 impl NetRequest {
@@ -318,7 +365,7 @@ impl NetRequest {
         match self {
             NetRequest::Plugins { .. } => crate::plugin_directory::NO_DIRECTORY,
             NetRequest::Library { .. } | NetRequest::Upload(_) => NO_TEAM_LIBRARIES,
-            NetRequest::Hosting { .. } | NetRequest::Share { .. } => NO_HOSTING,
+            NetRequest::Hosting { .. } | NetRequest::Share { .. } | NetRequest::Admin { .. } => NO_HOSTING,
         }
     }
 
@@ -330,6 +377,7 @@ impl NetRequest {
             NetRequest::Upload(_) => |why| NetReply::Upload(Err(why)),
             NetRequest::Hosting { .. } => |why| NetReply::Hosting(Err(why)),
             NetRequest::Share { .. } => |why| NetReply::Share(Err(why)),
+            NetRequest::Admin { .. } => |why| NetReply::Admin(Err(why)),
         }
     }
 
@@ -347,6 +395,9 @@ impl NetRequest {
             (NetRequest::Share { server: a, file: f, create: x, .. }, NetRequest::Share { server: b, file: g, create: y, .. }) => {
                 a == b && f == g && x == y
             }
+            (NetRequest::Admin { server: a, file: f, reqs: x, .. }, NetRequest::Admin { server: b, file: g, reqs: y, .. }) => {
+                a == b && f == g && x.len() == y.len() && x.iter().zip(y).all(|(x, y)| std::mem::discriminant(x) == std::mem::discriminant(y))
+            }
             _ => false,
         }
     }
@@ -362,6 +413,9 @@ pub enum NetReply {
     Upload(std::result::Result<Published, String>),
     /// What the server says about its hosting, and its answer to the request, if one was sent.
     Hosting(std::result::Result<(HostInfo, Option<AdminReply>), String>),
+    /// The answers to [`NetRequest::Admin`]'s requests, in order (a new link whole, in place of its
+    /// token).
+    Admin(std::result::Result<Vec<AdminReply>, String>),
 }
 
 /// What a session without the network says about servers' hosting.
@@ -469,6 +523,10 @@ pub trait LiveLink: Send {
     ) -> std::result::Result<(HostInfo, Option<AdminReply>), String> {
         Err(NO_HOSTING.into())
     }
+    /// See [`NetRequest::Admin`]; waits for the server. Errors never echo the token.
+    fn admin(&mut self, _server: &str, _file: &str, _owner: &str, _reqs: Vec<Admin>) -> std::result::Result<Vec<AdminReply>, String> {
+        Err(NO_HOSTING.into())
+    }
     /// See [`NetRequest::Share`]; waits for the server. Errors never echo the key or the token.
     fn share(&mut self, _server: &str, _file: &str, _owner: &str, _revoke: &[String], _create: bool) -> std::result::Result<Option<Shared>, String> {
         Err(NO_HOSTING.into())
@@ -481,6 +539,7 @@ pub trait LiveLink: Send {
             NetRequest::Library { link, req } => NetReply::Library(self.library(&link, req)),
             NetRequest::Upload(o) => NetReply::Upload(self.upload(o)),
             NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(self.hosting(&server, &file, &owner, req)),
+            NetRequest::Admin { server, file, owner, reqs } => NetReply::Admin(self.admin(&server, &file, &owner, reqs)),
         }
     }
     /// Send `req` on a thread of its own and return at once: the answer arrives as [`Event::Net`]

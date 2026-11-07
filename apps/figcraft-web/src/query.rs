@@ -31,3 +31,17 @@ pub fn page_server(content: &str) -> Option<String> {
 pub fn control(search: &str) -> bool {
     search.strip_prefix('?').unwrap_or(search).split('&').any(|entry| entry.split('=').next() == Some("control"))
 }
+
+/// How long a file's address the homepage kept for after signing in stays good (see
+/// `web::KEPT_ADDRESS`).
+pub const KEPT_FOR_MS: f64 = 3_600_000.0;
+
+/// The address the homepage kept (`<milliseconds since 1970>|<#file=… or #join=…>`), when it is one
+/// and was kept less than [`KEPT_FOR_MS`] before `now_ms`.
+pub fn kept_address(kept: &str, now_ms: f64) -> Option<&str> {
+    let (at, hash) = kept.split_once('|')?;
+    let at: f64 = at.parse().ok()?;
+    let fresh = at.is_finite() && now_ms >= at && now_ms - at <= KEPT_FOR_MS;
+    let names_file = hash.starts_with("#file=") || join_link(hash).is_some();
+    (fresh && names_file && hash.len() <= 8192).then_some(hash)
+}

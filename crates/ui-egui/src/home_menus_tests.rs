@@ -191,12 +191,12 @@ fn rename_duplicate_share_and_versions_open_the_file_first() {
     assert!(!u.app.ui.home);
     assert_eq!(u.app.session.docs.len(), 2);
     assert_eq!(u.app.session.ds().unwrap().doc.name, "pic (Copy)");
-    // Share opens the file's Share popover.
+    // Share opens the file's Share dialog.
     u.app.ui.home = true;
     choose(&mut u, "pic", "Share");
     assert!(!u.app.ui.home);
     assert!(!u.app.ui.open_share, "the right panel took it");
-    assert!(egui::Popup::is_any_open(&u.ctx), "the Share popover is open");
+    assert!(u.app.ui.live.share.open, "the Share dialog is open");
     // Show version history opens the file and its versions.
     u.app.ui.home = true;
     choose(&mut u, "pic", "Show version history");

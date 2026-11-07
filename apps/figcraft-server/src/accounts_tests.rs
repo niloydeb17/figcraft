@@ -821,3 +821,55 @@ fn failed_sign_ins_all_look_the_same() {
     }
     assert_eq!(handle(&c, &post("/login", &format!("email=pw%40example.com&password={pw}"), None)).status, 303, "the right password still works");
 }
+
+/// A file shared by email (the Share dialog's invite) goes on each person's recent files, marked
+/// with who shared it, without the sharer's account id; someone without an account gets it when
+/// they sign up; sharing the same file again with a new link takes the old entry's place; only a
+/// join link to a file can be shared.
+#[test]
+fn files_shared_by_email_reach_each_persons_home() {
+    let dir = TempDir::new("acc-share");
+    let c = ctx(&dir, true);
+    let ada = token(&handle(&c, &post("/login", "email=ada%40example.com&password=12345678", None)));
+    handle(&c, &post_json("/auth/profile", r#"{"name":"Ada Byron"}"#, &ada));
+    let bo = token(&handle(&c, &post("/login", "email=bo%40example.com&password=12345678", None)));
+    let link = |t: &str| format!("figcraft://join?server=wss://figcraft.example.com&file=f1&token={t}");
+    let share = |emails: &str, target: &str| format!(r#"{{"emails":[{emails}],"target":"{target}","name":"Landing","kind":"design"}}"#);
+    let r = handle(&c, &post_json("/auth/share", &share(r#""Bo@Example.com","ada@example.com","cy@example.com""#, &link("one")), &ada));
+    assert_eq!(r.status, 200, "{}", body(&r));
+    let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    assert_eq!(v["reached"], serde_json::json!(["bo@example.com"]), "the sharer is never one of them");
+    assert_eq!(v["waiting"], serde_json::json!(["cy@example.com"]));
+
+    let bos = body(&handle(&c, &get("/auth/recents", "", Some(&bo))));
+    assert!(bos.contains(&link("one")) && bos.contains("\"by\":\"Ada Byron\""), "{bos}");
+    assert!(!bos.contains("byId"), "the sharer's account id stays on the server: {bos}");
+    assert_eq!(body(&handle(&c, &get("/auth/recents", "", Some(&ada)))), r#"{"files":[]}"#, "nothing for the sharer");
+
+    // A new link to the same file (access changed) takes the old one's place.
+    handle(&c, &post_json("/auth/share", &share(r#""bo@example.com""#, &link("two")), &ada));
+    let bos = body(&handle(&c, &get("/auth/recents", "", Some(&bo))));
+    assert!(bos.contains(&link("two")) && !bos.contains(&link("one")), "{bos}");
+    // Opening it keeps who shared it.
+    handle(&c, &post_json("/auth/recents", &format!(r#"{{"open":{{"target":"{}","name":"Landing","kind":"design"}}}}"#, link("two")), &bo));
+    assert!(body(&handle(&c, &get("/auth/recents", "", Some(&bo)))).contains("\"by\":\"Ada Byron\""));
+
+    // Cy signs up later and finds it, once.
+    let cy = token(&handle(&c, &post("/login", "email=cy%40example.com&password=12345678", None)));
+    let cys = body(&handle(&c, &get("/auth/recents", "", Some(&cy))));
+    assert!(cys.contains(&link("one")) && cys.contains("Ada Byron"), "{cys}");
+    assert!(accounts::shared::waiting(dir.path()).is_empty(), "claimed");
+
+    // Refused: web addresses, links that name no file, junk, too many, signed out, another site.
+    for target in ["https://evil.example/x", "figcraft://join?server=wss://a&code=K7M2QX9TD", "javascript:alert(1)", "figcraft://join?file=f1 x"] {
+        assert_eq!(handle(&c, &post_json("/auth/share", &share(r#""bo@example.com""#, target), &ada)).status, 400, "{target}");
+    }
+    assert_eq!(handle(&c, &post_json("/auth/share", &share(r#""not an email""#, &link("x")), &ada)).status, 400);
+    assert_eq!(handle(&c, &post_json("/auth/share", "nope", &ada)).status, 400);
+    let many: Vec<String> = (0..21).map(|i| format!("\"p{i}@example.com\"")).collect();
+    assert_eq!(handle(&c, &post_json("/auth/share", &share(&many.join(","), &link("x")), &ada)).status, 400);
+    assert_eq!(handle(&c, &post_json("/auth/share", &share(r#""bo@example.com""#, &link("x")), "forged")).status, 401);
+    let mut cross = post_json("/auth/share", &share(r#""bo@example.com""#, &link("x")), &ada);
+    cross.headers[0].1 = "https://evil.example".into();
+    assert_eq!(handle(&c, &cross).status, 403);
+}

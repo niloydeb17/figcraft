@@ -334,23 +334,35 @@ fn clicking_an_avatar_follows_and_escape_stops() {
 }
 
 #[test]
-fn share_popover_and_join_dialog() {
+fn share_dialog_and_join_dialog() {
     let (mut h, _) = Harness::new();
     let shapes = h.frames(3);
     let share = text_center(&shapes, "Share");
     h.click(share);
     let shapes = h.frames(2);
-    for t in ["Share this file", "Online", "Local network", "Start sharing", "Join with a code", "Export…"] {
-        assert!(has_text(&shapes, t), "the popover shows {t:?}");
+    for t in ["Share this file", "Add comma separated emails to invite", "Who has access", "Anyone", "owner", "More"] {
+        assert!(has_text(&shapes, t), "the dialog shows {t:?}");
     }
-    // Starting fails with this link: the error shows, nothing else changes.
-    h.click(text_center(&shapes, "Local network"));
+    for t in ["Online", "Local network", "Start sharing", "Join with a code", "Your name"] {
+        assert!(!has_text(&shapes, t), "the old popover's {t:?} is gone");
+    }
+    // More has the rest; starting on the local network fails with this link: the error shows,
+    // nothing else changes.
+    h.click(text_center(&shapes, "More"));
     let shapes = h.frames(2);
-    h.click(text_center(&shapes, "Start sharing"));
+    for t in ["Export…", "Join a file with a code or link…", "Share on the local network", "Publish to another server…"] {
+        assert!(has_text(&shapes, t), "More has {t:?}");
+    }
+    h.click(text_center(&shapes, "Share on the local network"));
+    h.frames(2);
     assert_eq!(h.app.session.live().status, Status::Off);
     assert!(h.app.ui.last_error.as_deref().is_some_and(|e| e.contains("not in this test")));
-    // File ▸ Join live session opens the dialog.
-    h.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    // Escape closes the Share dialog; File ▸ Join live session opens the Join dialog.
+    for pressed in [true, false] {
+        h.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() }]);
+    }
+    h.frames(1);
+    assert!(!h.app.ui.live.share.open, "Escape closed it");
     crate::menus::invoke(&mut h.app, "collab.join");
     let shapes = h.frames(2);
     assert!(has_text(&shapes, "Join live session") && has_text(&shapes, "Type the join code you were given, or paste an invite link."));

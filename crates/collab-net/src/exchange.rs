@@ -231,6 +231,16 @@ pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
                 share_links(Sharing { server, key, file, owner, revoke, create }, Box::new(move |r| answer(NetReply::Share(r))))
             }
         },
+        NetRequest::Admin { server, file, owner, reqs } => match Endpoint::parse(&server) {
+            Err(e) => answer(NetReply::Admin(Err(e))),
+            Ok((server, _)) => Next::Ask(
+                Box::new(Exchange::new(server.clone(), None, &file, &owner, reqs)),
+                Box::new(move |answers| {
+                    let r = answers.map(|a| a.replies.into_iter().filter_map(|r| requests::hosted(&server, Some(r))).collect());
+                    answer(NetReply::Admin(r))
+                }),
+            ),
+        },
         NetRequest::Plugins { .. } | NetRequest::Library { .. } | NetRequest::Upload(_) => return None,
     })
 }

@@ -30,8 +30,14 @@ pub(crate) fn start_join(
     let (id, ()) = s.live.start(cmd, |l, id| l.join_resuming(id, link, &name, resume).map_err(|e| bad(cmd, e)))?;
     let server = share.as_ref().map(|s| s.server.clone()).unwrap_or_default();
     // The session's file opens in a tab of its own; until then the join shows on this one.
-    s.live.open(Live { id, status: Status::Connecting, tab, server, published, share, ..Live::default() });
+    let dev = dev_link(link);
+    s.live.open(Live { id, status: Status::Connecting, tab, server, published, share, dev, ..Live::default() });
     Ok(id)
+}
+
+/// A Dev Mode link: its query has `dev=1` (the Share dialog's Copy Dev Mode link).
+pub fn dev_link(link: &str) -> bool {
+    link.split_once('?').is_some_and(|(_, q)| q.split('&').any(|kv| kv == "dev=1"))
 }
 
 fn leave(s: &mut Session, p: &Value) -> Result<Value> {

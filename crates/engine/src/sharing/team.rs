@@ -51,6 +51,26 @@ pub fn team_link(server: &str, file: &str) -> String {
     format!("figcraft://join?server={}&file={file}&team=1", plain_server(server))
 }
 
+/// A file's address in the browser build at `web` for join link `link` (what Copy link gives, in
+/// the desktop app as in the browser): `<web>#file=<link, escaped>`. The link rides in the
+/// fragment, which the browser never sends to the web server.
+pub fn file_link(web: &str, link: &str) -> String {
+    let escaped: String = link
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => char::from(b).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    format!("{web}#file={escaped}")
+}
+
+/// A browser build's address as a server gave it, when it is one (`http(s)://`, no fragment).
+pub fn web_address(web: &str) -> Option<&str> {
+    let w = web.trim();
+    valid_web(w).then_some(w)
+}
+
 /// The same file in the server's browser build at `web`: the link rides in the address's fragment,
 /// which the browser never sends to the web server.
 pub fn web_link(web: &str, server: &str, file: &str) -> String {

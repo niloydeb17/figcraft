@@ -207,6 +207,10 @@ impl LiveLink for NetLink {
         share(server, file, owner, revoke, create, &self.limits)
     }
 
+    fn admin(&mut self, server: &str, file: &str, owner: &str, reqs: Vec<Admin>) -> Result<Vec<AdminReply>, String> {
+        admin(server, file, owner, reqs, &self.limits)
+    }
+
     fn background(&mut self, job: u64, req: NetRequest) -> bool {
         let (inbox, limits) = (self.libraries.clone(), self.limits);
         let (failed, failure) = (inbox.clone(), req.failure());
@@ -217,6 +221,7 @@ impl LiveLink for NetLink {
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
                 NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(hosting(&server, &file, &owner, req, &limits)),
                 NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(share(&server, &file, &owner, &revoke, create, &limits)),
+                NetRequest::Admin { server, file, owner, reqs } => NetReply::Admin(admin(&server, &file, &owner, reqs, &limits)),
             };
             inbox.push(Event::Net { job, reply: Box::new(reply) });
         });
@@ -303,6 +308,14 @@ fn hosting(server: &str, file: &str, owner: &str, req: Option<Admin>, limits: &N
     let (endpoint, _) = Endpoint::parse(server)?;
     let (info, replies) = manage::hosting(&endpoint, file, owner, req.into_iter().collect(), limits, CONNECT)?;
     Ok((info, requests::hosted(&endpoint, replies.into_iter().next())))
+}
+
+/// Requests `reqs` about `file` with its owner token, on one connection (see [`LiveLink::admin`]).
+/// New links come back whole, in place of their tokens.
+fn admin(server: &str, file: &str, owner: &str, reqs: Vec<Admin>, limits: &NetLimits) -> Result<Vec<AdminReply>, String> {
+    let (endpoint, _) = Endpoint::parse(server)?;
+    let (_, replies) = manage::hosting(&endpoint, file, owner, reqs, limits, CONNECT)?;
+    Ok(replies.into_iter().filter_map(|r| requests::hosted(&endpoint, Some(r))).collect())
 }
 
 /// See [`LiveLink::share`]: as the server's operator when the address carries its key, else as

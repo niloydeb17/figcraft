@@ -316,14 +316,24 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             Ok(serde_json::json!({"invited": invited, "link": invite_link(ctx), "emailed": false}))
         }),
         ("GET", "/auth/recents") => match current(ctx, req) {
-            Some(u) => Response::json(200, &serde_json::json!({"files": ctx.accounts().recents(&u.id)})),
+            Some(u) => {
+                // Files shared with this email before the account was made arrive now.
+                let mut accounts = ctx.accounts();
+                accounts.claim_shared(&u.id);
+                Response::json(200, &serde_json::json!({"files": super::recents::for_browser(accounts.recents(&u.id))}))
+            }
             None => Response::json(401, &serde_json::json!({"error": "not signed in"})),
         },
         ("POST", "/auth/recents") => signed_in_json(ctx, req, |ctx, u| {
             let change: super::recents::Change =
                 serde_json::from_slice(&req.body).map_err(|_| "give `open` {target, name, kind} or `forget` (a target)".to_string())?;
             let files = ctx.accounts().change_recents(&u.id, change)?;
-            Ok(serde_json::json!({"files": files}))
+            Ok(serde_json::json!({"files": super::recents::for_browser(files)}))
+        }),
+        ("POST", "/auth/share") => signed_in_json(ctx, req, |ctx, u| {
+            let share: super::shared::Share = serde_json::from_slice(&req.body).map_err(|_| super::shared::BAD_SHARE.to_string())?;
+            let (reached, waiting) = ctx.accounts().share(&u.id, &share)?;
+            Ok(serde_json::json!({"reached": reached, "waiting": waiting, "emailed": false}))
         }),
         ("GET", "/auth/folders") => match current(ctx, req) {
             Some(u) => Response::json(200, &serde_json::json!({"folders": ctx.accounts().folders(&u.id)})),
@@ -345,7 +355,7 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             let body: Body = serde_json::from_slice(&req.body).map_err(|_| BAD.to_string())?;
             let png = base64::engine::general_purpose::STANDARD.decode(body.png.trim()).map_err(|_| BAD.to_string())?;
             let files = ctx.accounts().set_recent_picture(&u.id, &body.target, &png)?;
-            Ok(serde_json::json!({"files": files}))
+            Ok(serde_json::json!({"files": super::recents::for_browser(files)}))
         }),
         ("GET", "/auth/recents/picture") => {
             let picture = current(ctx, req).zip(req.query_value("p")).and_then(|(u, token)| ctx.accounts().recent_picture(&u.id, &token));
@@ -376,6 +386,7 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             | "/auth/admin"
             | "/auth/profile"
             | "/auth/invite"
+            | "/auth/share"
             | "/auth/recents"
             | "/auth/folders"
             | "/auth/recents/picture",

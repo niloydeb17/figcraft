@@ -128,15 +128,15 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let label = ui.painter().layout_no_wrap(tr("Share").to_string(), semibold(11.0), Color32::WHITE);
     let sw = (label.size().x + 24.0).max(54.0);
     let share = Rect::from_min_size(pos2(top.max.x - 8.0 - sw, top.center().y - 16.0), vec2(sw, 32.0));
-    let sresp = ui.interact(share, ui.scope_id().with("share"), Sense::click()).tip(tr("Share: live session, export"));
+    let sresp = ui.interact(share, ui.scope_id().with("share"), Sense::click()).tip(tr("Share this file"));
     // The UI3 toolbar's colours: the kit's blue, its hand-off green in Dev Mode, white text.
     let fill = crate::toolbar::mode_fill(app.ui.right_tab);
     ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { fill.gamma_multiply(0.9) } else { fill });
     ui.painter().galley(share.center() - label.size() / 2.0, label, Color32::WHITE);
-    if std::mem::take(&mut app.ui.open_share) {
-        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&sresp));
+    if std::mem::take(&mut app.ui.open_share) || sresp.clicked() {
+        crate::live::share::open(app);
     }
-    crate::live::share_popover(app, &sresp);
+    crate::live::share::show(app, ui.ctx());
     // Play presents; its chevron opens the play menu (present, or preview in a pane).
     let play = Rect::from_min_size(pos2(share.min.x - 4.0 - 49.0, top.center().y - 16.0), vec2(49.0, 32.0));
     let (tri_r, chev_r) =

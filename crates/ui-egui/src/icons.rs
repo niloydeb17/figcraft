@@ -304,6 +304,10 @@ icons! {
     SignOut,
     /// A team (a workspace): a tall building with a door and a low wing.
     Team,
+    /// Anyone with the link (the Share dialog): a globe, its rim, equator and one meridian bowed.
+    Globe,
+    /// Move a file to a folder (the Share dialog): a folder with an arrow rising out of it.
+    MoveToFolder,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).

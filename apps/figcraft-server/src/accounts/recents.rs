@@ -42,6 +42,22 @@ pub struct Recent {
     /// Its picture's token (`GET /auth/recents/picture?p=<token>`), once a browser sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<String>,
+    /// Someone else shared it with this account (the Share dialog's invite): their name, as Home
+    /// shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// The account that shared it (never sent to a browser): sharing the same file again with
+    /// another link takes this entry's place.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "byId")]
+    pub by_id: Option<String>,
+}
+
+/// A recent file as its account's browser gets it: without who shared it by account id.
+pub fn for_browser(mut list: Vec<Recent>) -> Vec<Recent> {
+    for r in &mut list {
+        r.by_id = None;
+    }
+    list
 }
 
 /// What a browser asks of the list (`POST /auth/recents`).
@@ -65,7 +81,7 @@ pub struct Opened {
     pub kind: String,
 }
 
-fn clean_target(t: &str) -> Result<String, String> {
+pub(super) fn clean_target(t: &str) -> Result<String, String> {
     let t = t.trim();
     if t.is_empty() || t.chars().count() > MAX_TARGET || t.chars().any(char::is_control) {
         return Err(format!("a file's `target` is its join code or link (1 to {MAX_TARGET} characters)"));
@@ -120,6 +136,62 @@ fn drop_pictures(accounts_dir: &Path, user: &str, before: &[Recent], after: &[Re
             log::warn!("accounts: a recent file's picture can't be removed: {e}");
         }
     }
+}
+
+/// Put a file someone shared first in account `user`'s list: `target` (the link of the user's own
+/// to it), named `name`, shared by account `by_id` called `by`. An entry the same account shared
+/// for the same file (an older link of theirs to it) goes. The list after.
+pub fn shared(accounts_dir: &Path, user: &str, file: &Shared) -> Result<Vec<Recent>, String> {
+    let p = path(accounts_dir, user).ok_or("no such account")?;
+    let target = clean_target(&file.target)?;
+    let mut list = list(accounts_dir, user);
+    let before = list.clone();
+    let same = file_id(&target);
+    list.retain(|r| r.target != target && !(r.by_id.as_deref() == Some(file.by_id.as_str()) && same.is_some() && file_id(&r.target) == same));
+    list.insert(
+        0,
+        Recent {
+            target,
+            name: clean_name(&file.name),
+            kind: if file.kind == "board" { "board" } else { "design" }.to_string(),
+            opened: file.at,
+            picture: None,
+            by: Some(clean_name(&file.by)).filter(|b| !b.is_empty() && b != "Untitled"),
+            by_id: Some(file.by_id.clone()),
+        },
+    );
+    list.truncate(MAX);
+    make_private_dir(&accounts_dir.join(DIR))?;
+    write_json(&p, &list)?;
+    drop_pictures(accounts_dir, user, &before, &list);
+    Ok(list)
+}
+
+/// A file shared with an account, as [`shared`] keeps it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Shared {
+    pub target: String,
+    pub name: String,
+    pub kind: String,
+    /// Who shared it: their name, and their account id.
+    pub by: String,
+    #[serde(rename = "byId")]
+    pub by_id: String,
+    /// When (seconds since 1970).
+    pub at: u64,
+}
+
+/// A file's name as a list keeps it: no control characters, at most [`MAX_NAME`], "Untitled" when
+/// empty.
+fn clean_name(name: &str) -> String {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
+    if name.is_empty() { "Untitled".to_string() } else { name }
+}
+
+/// The file a join link names (its `file=` part), if it names one.
+pub(super) fn file_id(target: &str) -> Option<&str> {
+    let (_, query) = target.split_once('?')?;
+    query.split('&').find_map(|kv| kv.strip_prefix("file=")).filter(|f| !f.is_empty())
 }
 
 /// Keep `png` as the picture of the file with `target` in account `user`'s list; the list after.
@@ -184,10 +256,11 @@ pub fn apply(accounts_dir: &Path, user: &str, change: Change) -> Result<Vec<Rece
         let name: String = o.name.trim().chars().filter(|c| !c.is_control()).take(MAX_NAME).collect();
         let name = if name.is_empty() { "Untitled".to_string() } else { name };
         let kind = if o.kind == "board" { "board" } else { "design" }.to_string();
-        // Its picture stays until a new one comes.
-        let picture = list.iter().find(|r| r.target == target).and_then(|r| r.picture.clone());
+        // Its picture, and who shared it, stay until a new one comes.
+        let was = list.iter().find(|r| r.target == target);
+        let (picture, by, by_id) = was.map(|r| (r.picture.clone(), r.by.clone(), r.by_id.clone())).unwrap_or_default();
         list.retain(|r| r.target != target);
-        list.insert(0, Recent { target, name, kind, opened: now(), picture });
+        list.insert(0, Recent { target, name, kind, opened: now(), picture, by, by_id });
         list.truncate(MAX);
     }
     if list != before {

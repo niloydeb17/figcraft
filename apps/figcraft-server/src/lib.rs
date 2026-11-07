@@ -154,6 +154,8 @@ fn start_accounts(cfg: &Config, at: SocketAddr, key: &str) -> Result<AuthServer,
 }
 
 #[cfg(test)]
+mod access_tests;
+#[cfg(test)]
 mod accounts_tests;
 #[cfg(test)]
 mod admin_budget_tests;

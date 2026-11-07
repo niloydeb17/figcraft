@@ -397,6 +397,20 @@ terms_url = ""                              # shown under the form when set
   are only ever handed back to their own account. `access` (`team` or `private`) and `role`
   (`edit` or `view`) are kept as chosen in Create folder: folders aren't shared with other
   accounts yet.
+- **Where the browser build is.** Any app may ask a server where its browser build is
+  (`Admin::Web`, answered with `web_url`, empty when unset): the desktop app's Copy link then gives
+  the file's browser address, `<web_url>#file=<link>`, as the browser build does, so a link opens
+  in any browser. A server older than the request closes that connection and the app gives its
+  `figcraft://` link instead.
+- **Files shared by email.** The Share dialog's Invite makes each person a link of their own to
+  the file (an owner request labelled `Invited: <email>`, so removing them revokes only theirs),
+  then hands it to `POST /auth/share` `{emails, target, name, kind}` (at most 20 addresses; the
+  target must be a `figcraft://join?…&file=…` link, never a web address). The file goes first in
+  each invited account's recent files, marked `by` with the sharer's name (Home shows who shared
+  it); a newer link from the same sharer for the same file takes the older entry's place.
+  Addresses without an account wait in `<data>/accounts/shared.json` (at most 200 per sharer,
+  5000 in all) and reach the account the first time its browser asks for its recent files. The
+  answer is `{reached, waiting, emailed: false}`: no mail is sent.
 - **No email yet.** Nothing sends mail: emails aren't verified and there is no reset link. The
   operator resets a password instead.
 

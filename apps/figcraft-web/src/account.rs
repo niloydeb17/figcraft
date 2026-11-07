@@ -151,6 +151,7 @@ impl Account {
                 Outgoing::RecentOpened(file) => ("/auth/recents", serde_json::json!({"open": file})),
                 Outgoing::RecentForget(target) => ("/auth/recents", serde_json::json!({"forget": target})),
                 Outgoing::Folder(change) => ("/auth/folders", change),
+                Outgoing::Share(file) => ("/auth/share", file),
             };
             spawn_local(async move {
                 match fetch("POST", path, Some(body.to_string())).await {

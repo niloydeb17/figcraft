@@ -439,3 +439,36 @@ fn joining_takes_a_code_of_either_kind_or_a_link() {
     assert_eq!((&r["status"], &r["reason"]), (&json!("failed"), &json!("No session with that code")));
     assert_eq!(s.message.as_deref(), Some("No session with that code"));
 }
+
+/// A file's address in a browser build (what Copy link gives, in the desktop app and the browser)
+/// joins like the link or code it carries; what isn't one is left for the usual checks.
+#[test]
+fn a_browser_address_joins_like_the_link_it_carries() {
+    use crate::live::web_address_target;
+    let link = "figcraft://join?server=wss://share.example/&file=f1&token=AbCdEfGhIjKlMnOpQrStUv";
+    let web = crate::team::file_link("https://figcraft.example/", link);
+    assert!(web.starts_with("https://figcraft.example/#file=figcraft%3A%2F%2Fjoin%3Fserver%3D"), "{web}");
+    assert_eq!(web_address_target(&web).as_deref(), Some(link), "the link comes back whole");
+    assert_eq!(join_target("", &web).as_deref(), Ok(link));
+    assert_eq!(join_target("", &format!("{web}&dev=1")).as_deref(), Ok(link), "other entries after it are dropped");
+    // A browser's own escaping (encodeURIComponent) and `#join=` with a pasted link's `&`s.
+    let page = "http://127.0.0.1:8768/#join=figcraft://join?server=wss://share.example/&file=f1&token=AbCdEfGhIjKlMnOpQrStUv";
+    assert_eq!(join_target("", page).as_deref(), Ok(link));
+    assert_eq!(
+        join_target("wss://s.example/", "https://x.example/app/#file=K7M-2QX-9TD").as_deref(),
+        Ok("figcraft://join?server=wss://s.example/&code=K7M2QX9TD")
+    );
+    // Not a file's address: left as typed (the join then says why), never another web address in
+    // a loop.
+    for typed in [
+        "https://x.example/",
+        "https://x.example/#templates",
+        "https://x.example/#file=",
+        "https://x.example/#file=%ZZ",
+        "https://x.example/#file=https%3A%2F%2Fy.example%2F%23file%3Dx",
+    ] {
+        assert!(web_address_target(typed).is_none(), "{typed}");
+        assert_eq!(join_target("", typed).as_deref(), Ok(typed), "{typed}");
+    }
+    assert!(web_address_target("figcraft://join?x#file=y").is_none(), "only web addresses");
+}

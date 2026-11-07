@@ -89,7 +89,16 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut fig, &author);
                     }
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
-                    let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
+                    let mut hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
+                    // Opened signed out, the address waited on the homepage through signing in.
+                    if hash.is_empty()
+                        && let Some(kept) = take_kept_address()
+                    {
+                        if let Some(Err(e)) = web_sys::window().map(|w| w.location().set_hash(&kept)) {
+                            log::warn!("couldn't name the file in the page's address: {e:?}");
+                        }
+                        hash = kept;
+                    }
                     if let Some(link) = crate::query::join_link(&hash) {
                         let link = js_sys::decode_uri_component(link).ok().and_then(|s| s.as_string()).unwrap_or_else(|| link.to_string());
                         figcraft_ui_egui::live::open_invite(&mut fig, &link);
@@ -540,3 +549,19 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), wasm_bindgen::JsValue> {
 
 /// How long a download's object URL is kept (milliseconds).
 const REVOKE_DOWNLOAD_MS: i32 = 40_000;
+
+/// Where the homepage keeps a file's address that was opened signed out (`sessionStorage`: this
+/// tab only, never sent anywhere; `homepage/index.html` writes it), so the editor opens that file
+/// once the visitor has signed in.
+const KEPT_ADDRESS: &str = "figcraft.address";
+
+/// The file address the homepage kept for after signing in ([`KEPT_ADDRESS`]), taken (it is used
+/// once).
+fn take_kept_address() -> Option<String> {
+    let storage = web_sys::window()?.session_storage().ok()??;
+    let kept = storage.get_item(KEPT_ADDRESS).ok()??;
+    if let Err(e) = storage.remove_item(KEPT_ADDRESS) {
+        log::warn!("couldn't forget the kept address: {e:?}");
+    }
+    crate::query::kept_address(&kept, js_sys::Date::now()).map(str::to_string)
+}

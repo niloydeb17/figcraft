@@ -9,6 +9,7 @@ pub mod http;
 pub mod pages;
 pub mod password;
 pub mod recents;
+pub mod shared;
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -615,6 +616,51 @@ impl Accounts {
         self.invites.extend(clean.iter().map(|e| Invite { by: user.to_string(), email: e.clone(), at: t }));
         write_json(&self.dir.join(INVITES), &self.invites)?;
         Ok(clean)
+    }
+
+    /// Share a file with the people at `share.emails` for `user` ([`shared`]): it goes on the
+    /// recent files of each who has an account, and waits for the others to sign up. The
+    /// addresses it reached and the ones it waits for.
+    pub fn share(&mut self, user: &str, share: &shared::Share) -> Result<(Vec<String>, Vec<String>), String> {
+        if share.emails.len() > INVITES_AT_ONCE {
+            return Err(format!("at most {INVITES_AT_ONCE} people at once"));
+        }
+        let me = self.user(user).ok_or("no such account")?;
+        let target = shared::join_link(&share.target)?;
+        let file =
+            recents::Shared { target, name: share.name.clone(), kind: share.kind.clone(), by: me.name.clone(), by_id: me.id.clone(), at: now() };
+        let my_email = me.email.clone();
+        let mut emails = Vec::new();
+        for e in &share.emails {
+            if e.trim().is_empty() {
+                continue;
+            }
+            let c = clean_email(e).ok_or_else(|| format!("{} isn't an email address", e.trim()))?;
+            if c != my_email && !emails.contains(&c) {
+                emails.push(c);
+            }
+        }
+        let (mut reached, mut waits) = (Vec::new(), Vec::new());
+        for e in emails {
+            match self.index(&e).and_then(|i| self.users.get(i)).map(|u| u.id.clone()) {
+                Some(id) => {
+                    recents::shared(&self.dir, &id, &file)?;
+                    reached.push(e);
+                }
+                None => {
+                    shared::wait(&self.dir, &e, &file)?;
+                    waits.push(e);
+                }
+            }
+        }
+        Ok((reached, waits))
+    }
+
+    /// Hand `user` the files shared with their email before they had an account.
+    pub fn claim_shared(&mut self, user: &str) {
+        if let Some(email) = self.user(user).map(|u| u.email.clone()) {
+            shared::claim(&self.dir, user, &email);
+        }
     }
 
     /// `user`'s recent files, newest first ([`recents`]).

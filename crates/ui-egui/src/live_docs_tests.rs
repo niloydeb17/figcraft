@@ -52,13 +52,22 @@ fn harness() -> (Harness, Queue) {
     (h, queue)
 }
 
-/// Share the file in front on the local network from its popover (which is open).
+/// Share the file in front on the local network from its Share dialog (which is open): More ▸
+/// Share on the local network.
 fn start_sharing(h: &mut Harness, shapes: &[egui::Shape]) -> Vec<egui::Shape> {
-    h.click(text_center(shapes, "Local network"));
+    more(h, shapes, "Share on the local network")
+}
+
+/// Choose `item` from the Share dialog's More menu.
+fn more(h: &mut Harness, shapes: &[egui::Shape], item: &str) -> Vec<egui::Shape> {
+    h.click(text_center(shapes, "More"));
     let shapes = h.frames(2);
-    h.click(text_center(&shapes, "Start sharing"));
+    h.click(text_center(&shapes, item));
     h.frames(2)
 }
+
+/// What the Share dialog shows while the file is shared on the local network.
+const ON_THE_NETWORK: &str = "Anyone on your network with the link";
 
 fn live(h: &Harness) -> Value {
     h.app.inspect()["live"].clone()
@@ -76,13 +85,13 @@ fn hana() -> Peer {
 #[test]
 fn the_share_popover_is_the_session_of_the_tab_in_front() {
     let (mut h, queue) = harness();
-    // Start a session for the first file from its Share popover.
+    // Start a session for the first file from its Share dialog.
     let shapes = h.frames(1);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
     assert!(has_text(&shapes, "Share this file"));
     let shapes = start_sharing(&mut h, &shapes);
-    for t in ["Sharing on your network · nobody else here yet", "Invite link", "Stop sharing"] {
+    for t in [ON_THE_NETWORK, "Copy link", "can edit"] {
         assert!(has_text(&shapes, t), "hosting shows {t:?}");
     }
     queue.lock().unwrap().push((1, LiveEvent::PeerJoined(hana())));
@@ -99,15 +108,11 @@ fn the_share_popover_is_the_session_of_the_tab_in_front() {
         (&json!("off"), &Value::Null, &Value::Null, &json!(0), &json!(1))
     );
     let shapes = h.frames(1);
-    for t in ["Share this file", "Start sharing", "Join with a code", "Advanced"] {
-        assert!(has_text(&shapes, t), "the new file's popover shows {t:?}");
-    }
-    for t in ["Invite link", "Stop sharing", "Sharing on your network · 1 person joined", "Hana"] {
-        assert!(!has_text(&shapes, t), "nothing of the other file's session: {t:?}");
-    }
+    assert!(has_text(&shapes, "Share this file") && has_text(&shapes, "More"), "the new file's dialog");
+    assert!(!has_text(&shapes, ON_THE_NETWORK), "nothing of the other file's session");
     // Start one here too: both run, each tab shows its own.
     let shapes = start_sharing(&mut h, &shapes);
-    assert!(has_text(&shapes, "Sharing on your network · nobody else here yet") && has_text(&shapes, "Stop sharing"));
+    assert!(has_text(&shapes, ON_THE_NETWORK));
     assert_eq!((&live(&h)["session"], &live(&h)["peers"], &live(&h)["sessions"]), (&json!(2), &json!(0), &json!(2)));
     assert_eq!(h.app.session.live().info.as_ref().unwrap().address, "127.0.0.1:47901");
     run(&mut h, "doc.switch", json!({"index": 0}));
@@ -115,9 +120,8 @@ fn the_share_popover_is_the_session_of_the_tab_in_front() {
     assert_eq!(h.app.session.live().info.as_ref().unwrap().address, "127.0.0.1:47900");
     // Stopping the first leaves the second running.
     let shapes = h.frames(1);
-    h.click(text_center(&shapes, "Stop sharing"));
-    let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Start sharing"));
+    let shapes = more(&mut h, &shapes, "Stop sharing on the local network");
+    assert!(!has_text(&shapes, ON_THE_NETWORK));
     assert_eq!((&live(&h)["status"], &live(&h)["sessions"]), (&json!("off"), &json!(1)));
     run(&mut h, "doc.switch", json!({"index": 1}));
     assert_eq!((&live(&h)["status"], &live(&h)["session"]), (&json!("live"), &json!(2)));

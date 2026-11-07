@@ -75,6 +75,9 @@ pub enum Outgoing {
     RecentOpened(Value),
     /// `/auth/recents {forget}`: a file's target to take off them.
     RecentForget(String),
+    /// `/auth/share`: a file shared with people by email ({emails, target (their own link to
+    /// it), name, kind}): it goes on their Home.
+    Share(Value),
     /// `/auth/folders`: one change to the account's folders ({create}, {rename}, {delete}, {star},
     /// {add} or {remove}, as [`folders`] makes them).
     Folder(Value),
@@ -105,7 +108,7 @@ impl AccountState {
         std::mem::take(&mut self.outbox)
     }
 
-    fn queue(&mut self, o: Outgoing) {
+    pub(crate) fn queue(&mut self, o: Outgoing) {
         if self.account.is_some() {
             self.outbox.push(o);
         }

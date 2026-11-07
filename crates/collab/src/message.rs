@@ -391,6 +391,10 @@ pub enum Admin {
     /// [`AdminReply::Team`]; they are joined with [`ResolveTeam`]. Servers older than this request
     /// can't read it.
     Team,
+    /// Where the server's browser build is served, so an app can give links that open in any
+    /// browser ([`AdminReply::Web`]). Anyone who reaches the server may ask. Servers older than
+    /// this request can't read it (they close the connection: the app gives its own links then).
+    Web,
 }
 
 /// The most files an [`AdminReply::Team`] lists (the most recently changed ones).
@@ -516,6 +520,11 @@ pub enum AdminReply {
     Team {
         web: String,
         files: Vec<TeamFile>,
+    },
+    /// The answer to [`Admin::Web`]: where the server's browser build is served (empty: the
+    /// operator didn't say).
+    Web {
+        web: String,
     },
 }
 

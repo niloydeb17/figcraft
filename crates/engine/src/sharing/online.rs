@@ -198,7 +198,7 @@ fn now() -> u64 {
 
 impl Live {
     /// The server file this session is in as its owner or publisher: `(server, file id)`.
-    pub(crate) fn server_file(&self) -> Option<(String, String)> {
+    pub fn server_file(&self) -> Option<(String, String)> {
         let p = self.published.as_ref()?;
         let server = self.share.as_ref().filter(|s| s.via == Via::Online).map_or(self.server.as_str(), |s| s.server.as_str());
         Some((server.to_string(), p.file.clone()))

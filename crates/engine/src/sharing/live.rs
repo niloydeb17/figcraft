@@ -62,18 +62,27 @@ use crate::{DocState, EngineError, Result, Session, TextEdit, ViewState, bad, sp
 mod events;
 mod host;
 mod join;
+mod people;
 mod sync;
 mod types;
 
 use host::unavailable;
 pub use host::{MAX_REPORT, hosting_json};
 pub(crate) use host::{clean_shared, share_answer};
+pub use join::can_remove_people;
 pub(crate) use join::start_join;
-pub use join::{can_remove_people, specs};
+pub use people::{INVITED, MAX_INVITED, owns_open_file};
+
+/// The live session commands.
+pub fn specs() -> Vec<CommandSpec> {
+    let mut list = join::specs();
+    list.extend(people::specs());
+    list
+}
 pub use types::{
     Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, MAX_NAME, MAX_PEERS, MAX_SELECTION, NO_HOSTING, NO_SESSION, NetReply, NetRequest, ONLINE_OFF,
     PEOPLE, PageInfo, PublishOptions, Published, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via,
-    join_target, parse_color,
+    join_target, parse_color, web_address_target,
 };
 
 /// The view a follow last applied: any other view means the user moved.
@@ -124,6 +133,9 @@ pub struct Live {
     pub published: Option<Published>,
     /// The session was started by sharing with a join code (`collab.share`): how, and its codes.
     pub share: Option<Share>,
+    /// Joined with a Dev Mode link (`dev=1`): the UI shows the file in Dev Mode once it is there,
+    /// and clears this.
+    pub dev: bool,
     /// The upload was an automatic save (`collab.share {quiet: true}`, the web page keeping the
     /// open file on its server): the UI says "Saving…" and "Saved" instead of swapping its toolbar
     /// for the view-only one while the file is on its way.

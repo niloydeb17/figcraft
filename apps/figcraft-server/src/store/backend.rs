@@ -18,6 +18,7 @@ fn changes_files(req: &Admin) -> bool {
             | Admin::Owned { .. }
             | Admin::RemovePeer { .. }
             | Admin::Team
+            | Admin::Web
     )
 }
 
@@ -192,6 +193,8 @@ impl Backend for Store {
             Admin::Owned { files } => return self.owned(files).into(),
             // Anyone who reaches the server, when its operator turned the team list on.
             Admin::Team => return self.team(open).into(),
+            // Anyone who reaches the server: where its browser build is.
+            Admin::Web => return AdminReply::Web { web: self.cfg.hosting.web.clone() }.into(),
             Admin::Links { file }
             | Admin::CreateLink { file, .. }
             | Admin::Revoke { file, .. }
@@ -237,6 +240,7 @@ impl Backend for Store {
             Admin::Code { file, token } => self.set_code(&file, &token).map_or_else(failed, |code| AdminReply::Code { code }.into()),
             Admin::Owned { files } => self.owned(&files).into(),
             Admin::Team => self.team(open).into(),
+            Admin::Web => AdminReply::Web { web: self.cfg.hosting.web.clone() }.into(),
             // The hub removes people itself (it knows who is connected); it never asks the store.
             Admin::RemovePeer { .. } => failed("removing someone from a file is done by the server's hub".into()),
             Admin::Remove { file } => {

@@ -49,3 +49,20 @@ fn a_page_names_its_own_server_without_a_key() {
         assert_eq!(page_server(bad), None, "{bad:?} is ignored");
     }
 }
+
+#[test]
+fn a_kept_address_is_used_once_fresh_and_only_for_a_file() {
+    use crate::query::{KEPT_FOR_MS, kept_address};
+    let now = 1_800_000_000_000.0;
+    let kept = |hash: &str, age: f64| format!("{}|{hash}", now - age);
+    assert_eq!(kept_address(&kept("#file=figcraft%3A%2F%2Fjoin", 1000.0), now), Some("#file=figcraft%3A%2F%2Fjoin"));
+    assert_eq!(kept_address(&kept("#join=K7M-2QX-9TD", 0.0), now), Some("#join=K7M-2QX-9TD"));
+    assert_eq!(kept_address(&kept("#file=x", KEPT_FOR_MS + 1.0), now), None, "too old");
+    assert_eq!(kept_address(&kept("#file=x", -5000.0), now), None, "from the future");
+    for junk in ["#templates", "", "#", "file=x"] {
+        assert_eq!(kept_address(&kept(junk, 0.0), now), None, "{junk}");
+    }
+    for junk in ["", "|#file=x", "NaN|#file=x", "abc|#file=x", "#file=x"] {
+        assert_eq!(kept_address(junk, now), None, "{junk}");
+    }
+}

@@ -111,7 +111,8 @@ impl Cloud {
         }
         self.sent.insert(uid);
         self.still = None;
-        if fig.run("collab.share", json!({"quiet": true})).is_none() {
+        // Anyone with the link can view, until you choose otherwise (the incumbent's default).
+        if fig.run("collab.share", json!({"quiet": true, "access": "view"})).is_none() {
             self.failed(uid, now);
             return true;
         }

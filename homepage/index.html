@@ -81,5 +81,13 @@
     <section class="closing" aria-labelledby="closing-title"><div class="closing-pixels" aria-hidden="true"></div><div class="section-kicker">YOUR NEXT IDEA STARTS HERE</div><h2 id="closing-title">A blank canvas.<br> A world of possibilities.</h2><div class="hero-buttons"><a class="button button-lime" href="/login">Open Figcraft</a><a class="button button-white" href="#templates">Find inspiration</a></div><span class="closing-star" aria-hidden="true">✳</span></section>
   </main>
   <footer class="footer"><div class="footer-top"><div class="footer-about"><a class="brand" href="#" aria-label="Figcraft home">figcraft.</a><p>An open canvas for<br> what comes next.</p></div><div><h3>Make</h3><a href="/login">Open the editor</a><a href="#workspace">Design & prototype</a><a href="#templates">Explore templates</a></div><div><h3>Explore</h3><a href="#why-figcraft">Why Figcraft</a><a href="https://github.com/storytold/figcraft/tree/main/docs" target="_blank" rel="noopener noreferrer">Documentation</a><a href="#questions">Questions</a></div><div><h3>Build together</h3><a href="https://github.com/storytold/figcraft" target="_blank" rel="noopener noreferrer">GitHub</a><a href="https://github.com/storytold/figcraft/releases" target="_blank" rel="noopener noreferrer">Download Figcraft</a><a href="https://github.com/storytold/figcraft/issues" target="_blank" rel="noopener noreferrer">Contribute</a></div></div><div class="footer-bottom"><span>Figcraft · An open-source design tool.</span><span>Made for making.</span><a href="#">Back to top ↑</a></div></footer>
+<script>
+// A file's address (#file=… or #join=…) opened signed out: kept in this tab only (it carries the
+// link's secret, so it is never sent anywhere), and the editor opens that file after signing in.
+try {
+  var h = location.hash;
+  if (/^#(file|join)=/.test(h) && h.length <= 8192) sessionStorage.setItem("figcraft.address", Date.now() + "|" + h);
+} catch (e) {}
+</script>
 </body>
 </html>
