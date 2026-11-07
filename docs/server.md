@@ -381,6 +381,16 @@ terms_url = ""                              # shown under the form when set
   token's key is a hash of the target, never the target; a new picture gets a new token. Pictures
   are kept in `<data>/accounts/recents/<account id>/<key>.png` and go when their file leaves the
   list.
+- **Folders.** Home ▸ All folders lists the account's folders: `GET /auth/folders` answers
+  `{folders: [{id, name, starred, updated, access, role, files: [{target, name, kind}]}]}`, newest
+  first, and `POST /auth/folders` takes one change at a time: `{create: {id, name, access?, role?}}`,
+  `{rename: {id, name}}`, `{delete: id}`, `{star: {id, on}}`, `{add: {id, file: {target, name, kind}}}`
+  (which takes the file out of any other folder: a file is in one folder at a time) or
+  `{remove: target}`. Each account's folders are `<data>/accounts/folders/<account id>.json` (at
+  most 100 folders of 200 files each, written atomically, mode 0600); like the recent files, they
+  are only ever handed back to their own account. `access` (`team` or `private`) and `role`
+  (`edit` or `view`) are kept as chosen in Create folder: folders aren't shared with other
+  accounts yet.
 - **No email yet.** Nothing sends mail: emails aren't verified and there is no reset link. The
   operator resets a password instead.
 

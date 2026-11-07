@@ -229,7 +229,7 @@ impl Cloud {
         let Some(png) = fig.session.docs.iter().find(|d| d.uid == uid).and_then(|d| figcraft_ui_egui::card_picture_png(&d.doc)) else {
             return waiting;
         };
-        fig.set_recent_picture(ctx, &target, &png);
+        fig.set_recent_picture(ctx, &target, &png, true);
         // Signed in: the account's server keeps it for a reload and other computers.
         if fig.session.account.account.is_some() {
             let body = json!({"target": target, "png": base64::engine::general_purpose::STANDARD.encode(&png)}).to_string();

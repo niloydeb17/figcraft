@@ -13,8 +13,10 @@ use crate::cmd::CommandSpec;
 use crate::params::{boolean, get, string};
 use crate::{EngineError, Result, Session, bad, spec};
 
+pub mod folders;
 pub mod recents;
 
+pub use folders::{Folder, FolderFile};
 pub use recents::RecentFile;
 
 pub const ROLES: &[&str] = &[
@@ -73,6 +75,9 @@ pub enum Outgoing {
     RecentOpened(Value),
     /// `/auth/recents {forget}`: a file's target to take off them.
     RecentForget(String),
+    /// `/auth/folders`: one change to the account's folders ({create}, {rename}, {delete}, {star},
+    /// {add} or {remove}, as [`folders`] makes them).
+    Folder(Value),
 }
 
 /// The account, the local answers and what waits to be sent.
@@ -85,6 +90,8 @@ pub struct AccountState {
     pub outbox: Vec<Outgoing>,
     /// The account's recent files on its server, newest first ([`recents`]).
     pub recents: Vec<RecentFile>,
+    /// The account's folders, newest first ([`folders`]).
+    pub folders: Vec<Folder>,
 }
 
 impl AccountState {
@@ -176,6 +183,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         s.account.account = None;
         s.account.outbox.clear();
         s.account.recents.clear();
+        s.account.folders.clear();
         return Ok(account_json(s));
     }
     let email = string(p, "email").and_then(|e| clean_email(&e)).ok_or_else(|| bad(CMD, "a signed-in account has an `email`"))?;
@@ -373,5 +381,6 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
     ];
     list.extend(recents::specs());
+    list.extend(folders::specs());
     list
 }

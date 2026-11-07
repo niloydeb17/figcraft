@@ -50,3 +50,27 @@ fn back_to_files_in_the_main_menu_goes_home_and_only_without_a_strip() {
     with.frame(vec![]);
     assert!(tree(&mut with).iter().all(|n| n.label() != Some("Back to files")), "with tabs, Home is the tab");
 }
+
+#[test]
+fn back_to_files_lights_up_under_the_pointer_like_the_other_rows() {
+    let mut u = setup(true);
+    u.app.ui.main_menu = true;
+    u.frame(vec![]);
+    let item = tree(&mut u).into_iter().find(|n| n.label() == Some("Back to files")).expect("the menu offers Back to files");
+    let at = centre(&item);
+    let hover = crate::theme::Tokens::get(&u.ctx).menu_hover;
+    let lit = |u: &mut Ui, events: Vec<egui::Event>| {
+        let shapes = crate::live_tests::flat(&u.frame_output(events).shapes);
+        shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r) if r.fill == hover && r.rect.contains(at)))
+    };
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert!(!lit(&mut u, vec![]), "not lit before the pointer comes");
+    lit(&mut u, vec![egui::Event::PointerMoved(at)]);
+    // Once the menu has faded in.
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert!(lit(&mut u, vec![]), "lit under the pointer");
+}

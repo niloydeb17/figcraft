@@ -15,6 +15,8 @@ use crate::i18n::{tr, tr_noop, trf};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, BRAND, Tokens, regular, semibold};
 use crate::widgets;
+pub mod folders;
+pub mod home_menus;
 pub mod home_recents;
 pub mod online;
 
@@ -25,6 +27,8 @@ pub enum Section {
     Recents,
     Online,
     Templates,
+    /// All folders (the sidebar's row under the workspace), or one folder's files.
+    Folders,
 }
 
 impl Section {
@@ -41,11 +45,12 @@ impl Section {
             Section::Recents => "recents",
             Section::Online => "online",
             Section::Templates => "templates",
+            Section::Folders => "folders",
         }
     }
 
     pub fn parse(id: &str) -> Option<Section> {
-        Section::ALL.into_iter().map(|(section, ..)| section).find(|section| section.id() == id)
+        Section::ALL.into_iter().map(|(section, ..)| section).chain([Section::Folders]).find(|section| section.id() == id)
     }
 }
 
@@ -62,6 +67,12 @@ pub struct Home {
     pub recents: crate::home_recents::Recents,
     /// The kind of recent file shown (all when none).
     pub files_filter: Option<figcraft_doc::FileKind>,
+    /// A recent file chosen on Home is being joined (its session): what to do once it's in.
+    pub then: Option<(u64, home_menus::Then)>,
+    /// The folder whose files show (All folders when `None`).
+    pub folder: Option<String>,
+    /// Create folder, Move to folder and Rename folder.
+    pub folder_dialogs: folders::Dialogs,
 }
 
 const SIDEBAR: f32 = 240.0;
@@ -140,8 +151,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
         sidebar(app, ui, &t, left);
         let searching = !app.ui.home_view.file_query.trim().is_empty();
-        let title =
-            if searching { tr("Search results") } else { tr(Section::ALL.iter().find(|(s, ..)| *s == app.ui.home_view.section).map_or("", |x| x.2)) };
+        // The folders are the account's: signed out (or a folder gone), back to Recents.
+        if app.ui.home_view.section == Section::Folders && app.session.account.account.is_none() {
+            app.ui.home_view.section = Section::Recents;
+        }
+        if app.ui.home_view.folder.as_deref().is_some_and(|id| app.session.account.folder(id).is_none()) {
+            app.ui.home_view.folder = None;
+        }
+        let title = if searching {
+            tr("Search results")
+        } else if app.ui.home_view.section == Section::Folders {
+            tr("All folders")
+        } else {
+            tr(Section::ALL.iter().find(|(s, ..)| *s == app.ui.home_view.section).map_or("", |x| x.2))
+        };
         top_bar(app, ui, &t, Rect::from_min_size(pos2(left.max.x, rect.min.y), vec2(rect.width() - SIDEBAR, TOPBAR_H)), title);
         let main = Rect::from_min_max(pos2(left.max.x, rect.min.y + TOPBAR_H), rect.max);
         if !searching && app.ui.home_view.section == Section::Online {
@@ -154,6 +177,16 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(CARD_GAP, 0.0);
+                if !searching && app.ui.home_view.section == Section::Folders {
+                    padded(ui, 24, |ui| match app.ui.home_view.folder.clone().and_then(|id| app.session.account.folder(&id).cloned()) {
+                        Some(folder) => {
+                            folders::folder_heading(app, ui, &t, &folder);
+                            crate::home_recents::section_in(app, ui, &t, "", Some(&folder));
+                        }
+                        None => folders::all_folders(app, ui, &t),
+                    });
+                    return;
+                }
                 if !searching && app.ui.home_view.section != Section::Templates {
                     recents(app, ui, &t);
                     return;
@@ -169,6 +202,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             });
         });
     });
+    folders::dialogs(app, ui.ctx());
     // The whole window is the drop target, not only the canvas.
     crate::drop_overlay(ui.ctx(), ui.ctx().content_rect(), tr("Drop to open"));
 }
@@ -245,8 +279,17 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         app.toast(tr("Drafts aren't in FigCraft yet: files live on this computer or on a server."));
     }
     y += 32.0;
-    if nav_row(ui, t, left, y, Icon::ViewGrid, t.icon, tr("All folders"), false).clicked() {
-        app.open_dialog();
+    // Signed in: the account's folders; else the computer's own, through the file dialog.
+    let signed_in = app.session.account.account.is_some();
+    let in_folders = signed_in && app.ui.home_view.section == Section::Folders && app.ui.home_view.file_query.trim().is_empty();
+    if nav_row(ui, t, left, y, Icon::ViewGrid, t.icon, tr("All folders"), in_folders && app.ui.home_view.folder.is_none()).clicked() {
+        if signed_in {
+            app.ui.home_view.section = Section::Folders;
+            app.ui.home_view.folder = None;
+            app.ui.home_view.file_query.clear();
+        } else {
+            app.open_dialog();
+        }
     }
     y += 32.0;
     if nav_row(ui, t, left, y, Icon::Resources, t.icon, tr("Resources"), false).clicked() {
@@ -277,10 +320,27 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     ui.painter().text(pos2(x + 24.0, y + 16.0), Align2::LEFT_CENTER, tr("Starred"), semibold(11.0), t.text);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 8.0, y + 16.0), vec2(16.0, 16.0)), Icon::Chevron, t.icon_secondary);
     y += 32.0;
-    if nav_row(ui, t, left, y, Icon::Folder, Color32::from_rgb(0xAF, 0xBC, 0xCF), tr("Team folder"), false).clicked() {
-        app.toast(tr("Starring isn't in FigCraft yet."));
+    // The starred folders (signed in); until there are any, the team folder.
+    let starred: Vec<(String, String)> = app.session.account.folders.iter().filter(|f| f.starred).map(|f| (f.id.clone(), f.name.clone())).collect();
+    if starred.is_empty() && nav_row(ui, t, left, y, Icon::Folder, Color32::from_rgb(0xAF, 0xBC, 0xCF), tr("Team folder"), false).clicked() {
+        app.toast(if signed_in { tr("Star a folder in All folders to list it here.") } else { tr("Starring isn't in FigCraft yet.") });
     }
-    // The upgrade button at the foot.
+    for (id, name) in starred {
+        let current = in_folders && app.ui.home_view.folder.as_deref() == Some(id.as_str());
+        let shown = widgets::elide_font(ui, &name, SIDEBAR - 60.0, regular(11.0));
+        if nav_row(ui, t, left, y, Icon::Folder, Color32::from_rgb(0xAF, 0xBC, 0xCF), &shown, current).clicked() {
+            folders::open_folder(app, &id);
+        }
+        y += 32.0;
+        // Not over the upgrade button at the foot.
+        if y > left.max.y - 110.0 {
+            break;
+        }
+    }
+    // The upgrade button at the foot, while the account is on the free plan.
+    if paid_plan(app) {
+        return;
+    }
     let upgrade = Rect::from_min_size(pos2(x + 16.0, left.max.y - 58.0), vec2(SIDEBAR - 32.0, 32.0));
     let resp = ui.interact(upgrade, ui.scope_id().with("home_upgrade"), Sense::click());
     a11y::button(&resp, tr("Upgrade"));
@@ -316,21 +376,36 @@ fn nav_row(ui: &mut Ui, t: &Tokens, left: Rect, y: f32, icon: Icon, tint: Color3
     resp
 }
 
+/// The signed-in account is on a paid plan (Pro or Organization, as the onboarding recorded it):
+/// there is nothing to upgrade to.
+fn paid_plan(app: &FigApp) -> bool {
+    app.session.account.account.as_ref().is_some_and(|a| matches!(a.profile.plan.as_str(), "professional" | "organization"))
+}
+
+/// The workspace's mark colour.
+pub(crate) const WORKSPACE_MARK: Color32 = Color32::from_rgb(0xFF, 0x24, 0xBD);
+
+/// The workspace's name ("Ada's team", or "Your workspace" signed out) and its plan, short (the
+/// sidebar's chip) and long (All folders' heading). The plan is the one the onboarding recorded.
+pub(crate) fn workspace_names(app: &FigApp) -> (String, &'static str, &'static str) {
+    match &app.session.account.account {
+        Some(a) => {
+            let who = if a.name.trim().is_empty() { a.email.split('@').next().unwrap_or_default() } else { a.name.trim() };
+            let (short, long) = match a.profile.plan.as_str() {
+                "professional" => (tr("Pro"), tr("Professional")),
+                "organization" => (tr("Org"), tr("Organization")),
+                _ => (tr("Free"), tr("Starter")),
+            };
+            (trf("{name}'s team", &[("name", &who)]), short, long)
+        }
+        None => (tr("Your workspace").to_string(), tr("Free"), tr("Starter")),
+    }
+}
+
 /// The workspace: its round mark, its name, a chevron, and the plan beside them; choosing it shows
 /// your online files. The plan is the one the onboarding recorded (nothing is billed).
 fn workspace_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect, y: f32) {
-    let (name, plan) = match &app.session.account.account {
-        Some(a) => {
-            let who = if a.name.trim().is_empty() { a.email.split('@').next().unwrap_or_default() } else { a.name.trim() };
-            let plan = match a.profile.plan.as_str() {
-                "professional" => tr("Pro"),
-                "organization" => tr("Org"),
-                _ => tr("Free"),
-            };
-            (trf("{name}'s team", &[("name", &who)]), plan)
-        }
-        None => (tr("Your workspace").to_string(), tr("Free")),
-    };
+    let (name, plan, _) = workspace_names(app);
     let row = Rect::from_min_size(pos2(left.min.x + 8.0, y + 2.0), vec2(SIDEBAR - 16.0, 32.0));
     // The button runs from the mark to the chevron; the plan chip follows it.
     let chip_w = ui.painter().layout_no_wrap(plan.to_string(), regular(11.0), t.text).size().x + 12.0;
@@ -342,7 +417,7 @@ fn workspace_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect, y: f32) 
     }
     focus_ring(ui, t, button, &resp, 4);
     let mark = pos2(button.min.x + 16.0, button.center().y);
-    ui.painter().circle_filled(mark, 8.0, Color32::from_rgb(0xFF, 0x24, 0xBD));
+    ui.painter().circle_filled(mark, 8.0, WORKSPACE_MARK);
     let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
     ui.painter().text(mark, Align2::CENTER_CENTER, initial, semibold(10.0), Color32::WHITE);
     let shown = widgets::elide_font(ui, &name, button.width() - 40.0 - 24.0, semibold(13.0));
@@ -378,7 +453,7 @@ fn account_header(app: &mut FigApp, ui: &mut Ui, t: &Tokens, r: Rect) {
     let shown = widgets::elide_font(ui, &name, r.width() - 44.0 - 20.0, semibold(13.0));
     let name_w = ui.painter().layout_no_wrap(shown.clone(), semibold(13.0), t.text).size().x;
     let button = Rect::from_min_size(r.min, vec2((4.0 + 24.0 + 8.0 + name_w + 4.0 + 16.0 + 4.0).min(r.width()), 32.0));
-    let resp = ui.interact(button, ui.scope_id().with("home_account"), Sense::click()).on_hover_text(&email);
+    let resp = ui.interact(button, ui.scope_id().with("home_account"), Sense::click());
     a11y::button(&resp, &trf("Account menu for {name}", &[("name", &name)]));
     if resp.hovered() {
         ui.painter().rect_filled(button, CornerRadius::same(4), t.hover);
@@ -391,30 +466,29 @@ fn account_header(app: &mut FigApp, ui: &mut Ui, t: &Tokens, r: Rect) {
     }
     ui.painter().text(pos2(button.min.x + 36.0, button.center().y), Align2::LEFT_CENTER, shown, semibold(13.0), t.text);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(button.max.x - 12.0, button.center().y), vec2(16.0, 16.0)), Icon::Chevron, t.icon);
-    crate::right::menu_popup(&resp).show(|ui| {
-        if crate::right::menu_item(ui, &email, "") {
-            ui.close();
-        }
-        ui.separator();
-        if crate::right::menu_item(ui, tr("Preferences…"), "") {
-            app.ui.preferences = true;
-            ui.close();
-        }
-        if crate::right::menu_item(ui, tr("Keyboard shortcuts"), "") {
-            app.ui.shortcuts_panel = true;
-            ui.close();
-        }
-        if crate::right::menu_item(ui, tr("About FigCraft"), "") {
-            app.ui.about = true;
-            ui.close();
-        }
-    });
+    home_menus::account_menu(app, &resp, &name, &email);
 }
 
 /// The bar over the main area: the section's name on the left; on the right the ways to start a
 /// file as pills (their marks alone when the window is narrow), each saying what it does on hover.
 fn top_bar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, bar: Rect, title: &str) {
     let title_end = ui.painter().text(pos2(bar.min.x + 32.0, bar.center().y), Align2::LEFT_CENTER, title, regular(13.0), t.text).max.x;
+    // All folders: a new folder is what starts here.
+    if app.ui.home_view.section == Section::Folders && app.ui.home_view.folder.is_none() && app.ui.home_view.file_query.trim().is_empty() {
+        let label = tr("Folder");
+        let w = ui.painter().layout_no_wrap(label.to_string(), semibold(11.0), Color32::WHITE).size().x + 44.0;
+        let r = Rect::from_min_size(pos2(bar.max.x - 32.0 - w, bar.min.y + 8.0), vec2(w, 32.0));
+        let resp = ui.interact(r, ui.scope_id().with("home_new_folder"), Sense::click()).on_hover_text(tr("New folder"));
+        a11y::button(&resp, tr("New folder"));
+        ui.painter().rect_filled(r, CornerRadius::same(5), if resp.hovered() { ACCENT } else { BRAND });
+        focus_ring(ui, t, r, &resp, 5);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 20.0, r.center().y), vec2(14.0, 14.0)), Icon::Plus, Color32::WHITE);
+        ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, label, semibold(11.0), Color32::WHITE);
+        if resp.clicked() {
+            folders::open_create(app, None);
+        }
+        return;
+    }
     let pills = [
         (Icon::PenNib, tr("New design file"), tr("Start from a blank canvas"), BRAND),
         (Icon::Board, tr("New board"), tr("Sticky notes, shapes and connectors"), Color32::from_rgb(0x97, 0x47, 0xFF)),

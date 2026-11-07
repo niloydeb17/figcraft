@@ -42,6 +42,8 @@ pub struct Tokens {
     pub menu_text: Color32,
     pub menu_hover: Color32,
     pub menu_dim: Color32,
+    /// A hovered row in Home's menus (the account menu, a file's menu): a quiet grey on `menu`.
+    pub menu_row_hover: Color32,
     /// The ring around the control with the keyboard (keyboard navigation): at least 3:1 against
     /// the panels and the canvas.
     pub focus: Color32,
@@ -128,6 +130,7 @@ impl Tokens {
             menu_text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             menu_hover: BRAND,
             menu_dim: Color32::from_rgb(0x9A, 0x9A, 0x9A),
+            menu_row_hover: Color32::from_rgb(0x38, 0x38, 0x38),
             focus: ACCENT,
         }
     }
@@ -169,6 +172,7 @@ impl Tokens {
             menu_text: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             menu_hover: BRAND,
             menu_dim: Color32::from_rgb(0x9A, 0x9A, 0x9A),
+            menu_row_hover: Color32::from_rgb(0x38, 0x38, 0x38),
             focus: BRAND,
         }
     }

@@ -133,6 +133,9 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let fill = crate::toolbar::mode_fill(app.ui.right_tab);
     ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { fill.gamma_multiply(0.9) } else { fill });
     ui.painter().galley(share.center() - label.size() / 2.0, label, Color32::WHITE);
+    if std::mem::take(&mut app.ui.open_share) {
+        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&sresp));
+    }
     crate::live::share_popover(app, &sresp);
     // Play presents; its chevron opens the play menu (present, or preview in a pane).
     let play = Rect::from_min_size(pos2(share.min.x - 4.0 - 49.0, top.center().y - 16.0), vec2(49.0, 32.0));

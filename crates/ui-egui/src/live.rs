@@ -772,8 +772,11 @@ fn join_progress(app: &mut FigApp) -> Option<Option<String>> {
         return None;
     };
     if live.syncing() {
+        let id = *id;
         app.ui.live.joining = None;
         app.ui.home = false;
+        // A recent file opened from Home's menu to share, rename… it: that happens now.
+        crate::home::home_menus::joined(app, id);
         return None;
     }
     Some(match &live.status {

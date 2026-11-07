@@ -298,6 +298,12 @@ icons! {
     TileHexVertical,
     FlipGradient,
     RotateGradient,
+    /// Get the desktop app: an arrow down into a tray.
+    Download,
+    /// Log out: an arrow leaving a door frame.
+    SignOut,
+    /// A team (a workspace): a tall building with a door and a low wing.
+    Team,
 }
 
 /// Points along a circular arc from angle `a0` to `a1` (radians, y down: increasing is clockwise).

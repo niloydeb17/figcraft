@@ -393,7 +393,10 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     // Without a tab strip, the way out of the file: Back to files, then a rule.
                     if app.ui.no_tab_strip {
                         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-                        plain_row_hover(ui, &resp);
+                        // Highlighted on hover like every other row of the menu.
+                        if plain_row_hover(ui, &resp) {
+                            ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
+                        }
                         a11y::menu_item(&resp, tr("Back to files"), "", None);
                         ui.painter().text(pos2(r.min.x + 12.0, r.center().y), Align2::LEFT_CENTER, tr("Back to files"), regular(12.0), t.menu_text);
                         if resp.clicked() {
@@ -401,7 +404,7 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                             close = true;
                         }
                         ui.add_space(4.0);
-                        ui.painter().hline(r.x_range().expand(-0.0), ui.cursor().min.y, egui::Stroke::new(1.0, t.border));
+                        ui.painter().hline(r.x_range(), ui.cursor().min.y, egui::Stroke::new(1.0, Color32::from_white_alpha(30)));
                         ui.add_space(5.0);
                     }
                     // Quick actions search row.

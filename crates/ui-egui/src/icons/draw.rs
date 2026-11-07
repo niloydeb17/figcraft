@@ -1089,6 +1089,23 @@ fn draw(p: &P, icon: Icon) {
         Notifications | Recents | Community | Drafts | Resources | Trash | Folder | Upgrade => {}
         Contrast | PaintSolid | PaintGradient | PaintPattern | PaintImage | PaintVideo | PaintNoise | SelectSource | TileGrid | TileHex
         | TileHexVertical | FlipGradient | RotateGradient => {}
+        Download => {
+            p.line(7.5, 2.0, 7.5, 10.0);
+            p.head((7.5, 10.0), FRAC_PI_2, 3.5);
+            p.poly(&[(2.5, 9.5), (2.5, 13.5), (12.5, 13.5), (12.5, 9.5)], false);
+        }
+        Team => {
+            // The tall block, its door at the foot, and a lower wing on its right.
+            p.rect(3.5, 1.5, 9.5, 14.5, 1.0);
+            p.poly(&[(5.5, 14.5), (5.5, 11.5), (7.5, 11.5), (7.5, 14.5)], false);
+            p.poly(&[(9.5, 7.5), (12.5, 7.5), (12.5, 14.5), (9.5, 14.5)], false);
+        }
+        SignOut => {
+            // The door frame, open on the right where the arrow leaves it.
+            p.poly(&[(9.5, 5.0), (9.5, 2.5), (2.5, 2.5), (2.5, 13.5), (9.5, 13.5), (9.5, 11.0)], false);
+            p.line(6.0, 8.0, 14.0, 8.0);
+            p.head((14.0, 8.0), 0.0, 3.0);
+        }
         DevAnnotation => draw(p, Comment),
         Clipboard => draw(p, Export),
         RailVariables => draw(p, Styles),

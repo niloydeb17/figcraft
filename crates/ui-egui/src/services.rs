@@ -51,6 +51,14 @@ pub trait Services {
     fn open_url_here(&mut self, url: &str) {
         self.open_url(url);
     }
+    /// Sign the account out of the page's server and go to its sign-in page (the browser build;
+    /// elsewhere there is no account to leave). The account menu's Log out and Add account.
+    fn sign_out(&mut self) {}
+    /// The address that opens the file kept at `target` on the page's server (the browser build:
+    /// this page with `#file=…`), for Copy link and Open in new tab. `None` where there is none.
+    fn file_link(&self, _target: &str) -> Option<String> {
+        None
+    }
     /// Show the file at `path` in the platform's file manager (Finder, Explorer), selected where the
     /// platform can.
     fn reveal_path(&mut self, _path: &std::path::Path) {}

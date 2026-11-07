@@ -400,7 +400,7 @@ fn the_context_menu_opens_shows_in_the_folder_and_removes() {
     } else {
         "Show in folder"
     };
-    for item in ["Open", reveal, "Remove from recents"] {
+    for item in ["Open", reveal, "Remove from recent"] {
         assert!(has_text(&s, item), "{item}");
     }
     click(&mut u, text_center(&s, reveal));
@@ -408,7 +408,7 @@ fn the_context_menu_opens_shows_in_the_folder_and_removes() {
     let s = settle(&mut u);
     click_with(&mut u, text_center(&s, "icon"), PointerButton::Secondary);
     let s = flat(&u.frame_output(vec![]).shapes);
-    click(&mut u, text_center(&s, "Remove from recents"));
+    click(&mut u, text_center(&s, "Remove from recent"));
     assert!(!u.app.session.prefs.recent_files.contains(&paths[3]));
     assert_eq!(u.app.session.prefs.recent_files.len(), 4);
     assert!(log.lock().unwrap().saved.last().is_some_and(|p| p.recent_files.len() == 4), "kept");

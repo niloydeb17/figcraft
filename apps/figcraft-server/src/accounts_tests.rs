@@ -407,6 +407,7 @@ fn junk_requests_never_panic() {
             "/auth/invite",
             "/auth/recents",
             "/auth/recents/picture",
+            "/auth/folders",
         ] {
             let mut r = post(path, &junk, Some(&junk));
             r.query = junk.clone();
@@ -664,4 +665,70 @@ fn recent_files_keep_their_pictures() {
     assert_eq!(handle(&c, &post_json("/auth/recents", r#"{"forget":"K7M-2QX-9TD"}"#, &ada)).status, 200);
     assert_eq!(count(), 0);
     assert_eq!(handle(&c, &get("/auth/recents/picture", &format!("p={t2}"), Some(&ada))).status, 404);
+}
+
+#[test]
+fn folders_belong_to_their_account_and_a_file_is_in_one_at_a_time() {
+    let dir = TempDir::new("acc-folders");
+    let c = ctx(&dir, true);
+    let ada = token(&handle(&c, &post("/login", "email=ada%40example.com&password=12345678", None)));
+    let bo = token(&handle(&c, &post("/login", "email=bo%40example.com&password=12345678", None)));
+    assert_eq!(body(&handle(&c, &get("/auth/folders", "", Some(&ada)))), r#"{"folders":[]}"#);
+    for change in [
+        r#"{"create":{"id":"f1","name":"Brand"}}"#,
+        r#"{"create":{"id":"f2","name":"  "}}"#,
+        r#"{"rename":{"id":"f1","name":"Brand kit"}}"#,
+        r#"{"star":{"id":"f1","on":true}}"#,
+        r#"{"add":{"id":"f1","file":{"target":"K7M-2QX-9TD","name":"Landing","kind":"board"}}}"#,
+        r#"{"add":{"id":"f2","file":{"target":"AAA-BBB-CCC","name":"Ideas"}}}"#,
+        r#"{"add":{"id":"f2","file":{"target":"K7M-2QX-9TD","name":"Landing"}}}"#,
+    ] {
+        let r = handle(&c, &post_json("/auth/folders", change, &ada));
+        assert_eq!(r.status, 200, "{change}: {}", body(&r));
+    }
+    let v: serde_json::Value = serde_json::from_str(&body(&handle(&c, &get("/auth/folders", "", Some(&ada))))).unwrap();
+    let folders = v["folders"].as_array().unwrap();
+    assert_eq!(folders.iter().map(|f| f["id"].as_str().unwrap()).collect::<Vec<_>>(), ["f2", "f1"], "newest first");
+    assert_eq!(folders[0]["name"], "Untitled");
+    assert_eq!(folders[1]["name"], "Brand kit");
+    assert_eq!(folders[1]["starred"], true);
+    let targets =
+        |f: &serde_json::Value| f["files"].as_array().unwrap().iter().map(|x| x["target"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(targets(&folders[0]), ["K7M-2QX-9TD", "AAA-BBB-CCC"], "moved into f2, newest first");
+    assert!(targets(&folders[1]).is_empty(), "and out of f1");
+    // Someone else's folders are their own.
+    assert_eq!(body(&handle(&c, &get("/auth/folders", "", Some(&bo)))), r#"{"folders":[]}"#);
+    // Taken out, deleted, and kept across a restart.
+    assert_eq!(handle(&c, &post_json("/auth/folders", r#"{"remove":"AAA-BBB-CCC"}"#, &ada)).status, 200);
+    assert_eq!(handle(&c, &post_json("/auth/folders", r#"{"delete":"f1"}"#, &ada)).status, 200);
+    let again = Accounts::open(dir.path(), true, 21.0).unwrap();
+    let id = again.by_email("ada@example.com").unwrap().id.clone();
+    let kept = again.folders(&id);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].files.len(), 1);
+    // Refused: signed out, from another site, junk, two changes at once, a missing folder.
+    assert_eq!(handle(&c, &get("/auth/folders", "", Some("forged"))).status, 401);
+    assert_eq!(handle(&c, &post_json("/auth/folders", r#"{"delete":"f2"}"#, "forged")).status, 401);
+    let mut cross = post_json("/auth/folders", r#"{"delete":"f2"}"#, &ada);
+    cross.headers[0].1 = "https://evil.example".into();
+    assert_eq!(handle(&c, &cross).status, 403);
+    let long = "x".repeat(accounts::folders::MAX_TARGET + 1);
+    for bad in [
+        "nope",
+        "{}",
+        r#"{"create":{"id":"f2","name":"again"}}"#,
+        r#"{"create":{"id":"bad id"}}"#,
+        r#"{"delete":"f1","remove":"x"}"#,
+        r#"{"rename":{"id":"gone","name":"x"}}"#,
+        r#"{"star":{"id":"f2"}}"#,
+        r#"{"other":1}"#,
+        &format!(r#"{{"add":{{"id":"f2","file":{{"target":"{long}"}}}}}}"#),
+    ] {
+        assert_eq!(handle(&c, &post_json("/auth/folders", bad, &ada)).status, 400, "{bad}");
+    }
+    // At most MAX folders.
+    for i in 0..accounts::folders::MAX + 5 {
+        handle(&c, &post_json("/auth/folders", &format!(r#"{{"create":{{"id":"n{i}"}}}}"#), &ada));
+    }
+    assert_eq!(Accounts::open(dir.path(), true, 21.0).unwrap().folders(&id).len(), accounts::folders::MAX);
 }

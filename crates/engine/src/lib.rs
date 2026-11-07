@@ -174,6 +174,8 @@ impl Default for Session {
 #[cfg(test)]
 mod a11y_keys_tests;
 #[cfg(test)]
+mod account_folders_tests;
+#[cfg(test)]
 mod account_tests;
 #[cfg(test)]
 mod agent_presence_tests;

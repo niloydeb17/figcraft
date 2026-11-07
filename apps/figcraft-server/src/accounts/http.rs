@@ -14,6 +14,8 @@
 //! | `POST /auth/recents` | JSON `{open: {target, name, kind}}` or `{forget: target}`; the list after |
 //! | `POST /auth/recents/picture` | JSON `{target, png}` (base64): the picture of a file in the list; the list after |
 //! | `GET /auth/recents/picture?p=<token>` | that picture (`image/png`), or 404 |
+//! | `GET /auth/folders` | `{folders: [{id, name, starred, updated, files: [{target, name, kind}]}]}`: the account's folders, newest first |
+//! | `POST /auth/folders` | JSON, one of `{create: {id, name, access?, role?}}`, `{rename: {id, name}}`, `{delete: id}`, `{star: {id, on}}`, `{add: {id, file: {target, name, kind}}}`, `{remove: target}`; the folders after |
 //! | `GET /auth/check` | 204 when signed in, else 401 (the proxy asks before serving the app) |
 //! | `GET /auth/google` | starts signing in with Google (when it is set up) |
 //! | `GET /auth/google/callback` | where Google sends the browser back |
@@ -323,6 +325,15 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             let files = ctx.accounts().change_recents(&u.id, change)?;
             Ok(serde_json::json!({"files": files}))
         }),
+        ("GET", "/auth/folders") => match current(ctx, req) {
+            Some(u) => Response::json(200, &serde_json::json!({"folders": ctx.accounts().folders(&u.id)})),
+            None => Response::json(401, &serde_json::json!({"error": "not signed in"})),
+        },
+        ("POST", "/auth/folders") => signed_in_json(ctx, req, |ctx, u| {
+            let change: super::folders::Change = serde_json::from_slice(&req.body).map_err(|_| super::folders::BAD_CHANGE.to_string())?;
+            let folders = ctx.accounts().change_folders(&u.id, change)?;
+            Ok(serde_json::json!({"folders": folders}))
+        }),
         ("POST", "/auth/recents/picture") => signed_in_json(ctx, req, |ctx, u| {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -366,6 +377,7 @@ pub fn handle(ctx: &Ctx, req: &Request) -> Response {
             | "/auth/profile"
             | "/auth/invite"
             | "/auth/recents"
+            | "/auth/folders"
             | "/auth/recents/picture",
         ) => Response::html(405, pages::message("Not here", "That page doesn't take this kind of request.", &ctx.settings.site)),
         _ => Response::html(404, pages::message("Page not found", "There's nothing at this address.", &ctx.settings.site)),

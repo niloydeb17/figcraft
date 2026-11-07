@@ -125,6 +125,10 @@ mod guide_release_tests;
 #[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
+mod home_folders_tests;
+#[cfg(test)]
+mod home_menus_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
@@ -457,6 +461,8 @@ pub struct UiState {
     pub menu_input: Option<dialogs::MenuInput>,
     /// File ▸ Rename: the file name in the left panel starts its inline rename on the next frame.
     pub rename_file: bool,
+    /// The Share popover opens on the next frame (a recent file's Share, from Home).
+    pub open_share: bool,
     /// What the interface size drew last frame and whether the window held it back. Set by
     /// [`FigApp::logic`] for the main window.
     pub ui_scale: ui_scale::Plan,
@@ -664,6 +670,7 @@ impl Default for UiState {
             preferences: false,
             menu_input: None,
             rename_file: false,
+            open_share: false,
             ui_scale: ui_scale::plan(1.0, None, None),
             shortcuts_panel: false,
             shortcuts_tab: figcraft_engine::keymap::Group::Essential,

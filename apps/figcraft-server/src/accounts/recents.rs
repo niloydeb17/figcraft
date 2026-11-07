@@ -91,7 +91,7 @@ fn picture_key(target: &str) -> String {
 }
 
 /// A folder only the server's user can read (the files in it name nobody's files, but are theirs).
-fn make_private_dir(dir: &Path) -> Result<(), String> {
+pub(super) fn make_private_dir(dir: &Path) -> Result<(), String> {
     let mut dirs = std::fs::DirBuilder::new();
     dirs.recursive(true);
     #[cfg(unix)]

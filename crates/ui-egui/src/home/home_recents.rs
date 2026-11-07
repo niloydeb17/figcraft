@@ -1,7 +1,9 @@
 //! The home screen's recent files: a grid of cards, each with the picture its file carries on the
 //! colour of its page, or a table (name, last modified, created). Sorted by name, creation or last
 //! change either way round; a click selects a file, a double-click or Enter opens it, the arrow
-//! keys move the selection, and a right-click offers Open, Show in folder and Remove from recents.
+//! keys move the selection, and a right-click offers the file's menu ([`crate::home::home_menus`]):
+//! open it, copy its link, share, duplicate, rename it, its version history, remove it from the
+//! list. A star shows on the hovered card.
 //!
 //! What the files on disk say (whether they exist, their dates, their pictures) is read off the
 //! frame's thread: only the cards in view read their pictures, each cached by path and modification
@@ -18,6 +20,7 @@ use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::a11y;
+use crate::home::home_menus::{CardItem, CardMenu, Then};
 use crate::i18n::{tr, tr_noop, trf, trn};
 use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
@@ -553,15 +556,16 @@ impl Recents {
 
     /// Take `png` (a picture made by [`crate::home::card_picture_png`]) as the picture of the
     /// account's file `target`. False for bytes that aren't a picture.
-    pub fn set_cloud_picture(&mut self, ctx: &egui::Context, target: &str, png: &[u8]) -> bool {
+    pub fn set_cloud_picture(&mut self, ctx: &egui::Context, target: &str, png: &[u8], fade: bool) -> bool {
         let Some(p) = figcraft_format::thumbnail::decode_thumbnail(png, PICTURE_PX) else { return false };
         let image = egui::ColorImage::from_rgba_unmultiplied([p.width as usize, p.height as usize], &p.rgba);
         // The page's colour fills the picture's edges.
         let page = p.rgba.get(..4).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
         let texture = ctx.load_texture(format!("recent-cloud:{}", self.cloud.len()), image, egui::TextureOptions::LINEAR);
         let time = ctx.input(|i| i.time);
-        // A file whose picture was shown already changes at once; a first one fades in.
-        let arrived = if self.cloud.contains_key(target) { f64::NEG_INFINITY } else { time };
+        // A file whose picture was shown already changes at once; a first one fades in, unless it
+        // came before the page showed (the browser keeps the page covered until then).
+        let arrived = if !fade || self.cloud.contains_key(target) { f64::NEG_INFINITY } else { time };
         let kind = figcraft_doc::FileKind::Design;
         self.cloud.insert(target.to_string(), Ready { modified: None, page, texture: Some(texture), kind, arrived });
         ctx.request_repaint();
@@ -574,7 +578,7 @@ impl Recents {
     }
 
     /// The picture of the account's file `target` as [`Recents::picture`] gives one.
-    fn cloud_picture(&self, target: &str, time: f64) -> Option<(Option<Color32>, Option<egui::TextureHandle>, f32)> {
+    pub(crate) fn cloud_picture(&self, target: &str, time: f64) -> Option<(Option<Color32>, Option<egui::TextureHandle>, f32)> {
         let r = self.cloud.get(target)?;
         Some((r.page, r.texture.clone(), (((time - r.arrived) / FADE_SECS) as f32).clamp(0.0, 1.0)))
     }
@@ -634,6 +638,8 @@ pub fn inspect(app: &FigApp) -> Value {
 /// What the user asked for on the recent files this frame.
 enum Action {
     Open(String),
+    /// An item of a file's right-click menu, for that file.
+    Menu(CardItem, Chosen),
     /// Join a file in the account's recent files (its target).
     Join(String),
     /// Show the tab of an open file (its place in `Session::docs`).
@@ -644,6 +650,29 @@ enum Action {
     View(View),
     Tab(Tab),
     Filter(Option<figcraft_doc::FileKind>),
+}
+
+/// The file a menu item was chosen for.
+#[derive(Clone, Debug)]
+struct Chosen {
+    path: String,
+    open: Option<OpenTab>,
+    cloud: Option<String>,
+}
+
+impl Chosen {
+    fn of(file: &Shown) -> Self {
+        Chosen { path: file.path.clone(), open: file.open, cloud: file.cloud.clone() }
+    }
+
+    /// What opening it is.
+    fn opening(&self) -> Action {
+        match (self.open, &self.cloud) {
+            (Some(o), _) => Action::Switch(o.index),
+            (None, Some(target)) => Action::Join(target.clone()),
+            (None, None) => Action::Open(self.path.clone()),
+        }
+    }
 }
 
 /// The tabs beside "Recently viewed".
@@ -658,11 +687,22 @@ enum Tab {
 /// the files whose name or path has it, from every recent file; nothing at all when none has it.
 /// How many files are shown.
 pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize {
+    section_in(app, ui, t, query, None)
+}
+
+/// [`section`], or with a `folder` the files in that folder alone (on the account's server: the
+/// ones the recent files no longer list too), without the Recently viewed tabs.
+pub fn section_in(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str, folder: Option<&figcraft_engine::account::Folder>) -> usize {
     let searching = !query.is_empty();
     let open = crate::home::open_list(app);
-    // A search reaches every recent file; the files shown without one stay known through it.
-    let mut paths: Vec<String> = listed(&app.session.prefs.recent_files).take(if searching { usize::MAX } else { SHOWN }).cloned().collect();
-    for o in &open {
+    // A search reaches every recent file; the files shown without one stay known through it. A
+    // folder holds files on the server only.
+    let mut paths: Vec<String> = if folder.is_some() {
+        Vec::new()
+    } else {
+        listed(&app.session.prefs.recent_files).take(if searching { usize::MAX } else { SHOWN }).cloned().collect()
+    };
+    for o in open.iter().filter(|_| folder.is_none()) {
         if let Some(path) = &o.path
             && !paths.contains(path)
         {
@@ -713,6 +753,37 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
         f.cloud = Some(r.target.clone());
         files.push(f);
     }
+    if let Some(folder) = folder {
+        // Its files the recent files don't list (they fell off, or came from another computer).
+        for x in &folder.files {
+            let listed = files.iter().any(|f| f.cloud.as_deref() == Some(x.target.as_str()))
+                || app.session.account.recents.iter().any(|r| r.target == x.target && r.tab.is_some_and(|uid| uids.contains(&uid)));
+            if !listed {
+                let stat = Stat { exists: true, modified: Some(folder.updated), created: None };
+                let mut f = Shown::new(&format!("{CLOUD}{}", x.target), Some(stat));
+                f.name = x.name.clone();
+                f.kind = if x.kind == "board" { figcraft_doc::FileKind::Board } else { figcraft_doc::FileKind::Design };
+                f.cloud = Some(x.target.clone());
+                files.push(f);
+            }
+        }
+        // Only its files: a file on the server, or the tab showing one.
+        let target_of = |f: &Shown| -> Option<String> {
+            f.cloud.clone().or_else(|| f.open.and_then(|o| app.session.account.recent_for_tab(o.uid)).map(|r| r.target.clone()))
+        };
+        files.retain(|f| target_of(f).is_some_and(|t| folder.files.iter().any(|x| x.target == t)));
+        if files.is_empty() {
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 80.0), Sense::hover());
+            ui.painter().text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                tr("This folder is empty: right-click a file in Recents and choose Move file…"),
+                regular(11.0),
+                t.text_secondary,
+            );
+            return 0;
+        }
+    }
     let mut files = sorted(files, sort);
     let filter = app.ui.home_view.files_filter;
     if let Some(kind) = filter {
@@ -727,7 +798,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
         }
     }
     let with_created = files.iter().any(|f| f.stat.is_some_and(|s| s.created.is_some()));
-    let mut action = toolbar(ui, t, view, sort, with_created, filter, true);
+    let mut action = toolbar(ui, t, view, sort, with_created, filter, true, folder.is_none());
     let chosen = match view {
         View::Grid => grid(ui, t, state, &files, &pictures, now, time, reduce_motion),
         View::List => list(ui, t, state, &files, now, sort, with_created),
@@ -740,18 +811,15 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
 /// Do what the user asked for on the recent files this frame.
 fn apply(app: &mut FigApp, action: Option<Action>) {
     match action {
+        Some(Action::Menu(item, file)) => menu_choice(app, item, file),
         Some(Action::Open(path)) => {
             if app.run_user("file.open", json!({"path": path})).is_some() {
                 app.ui.home = false;
             }
         }
         Some(Action::Join(target)) => {
-            if let Some(joined) = app.run_user("account.openRecent", json!({"target": target})) {
-                // Its file shows once it is in (the Join dialog follows it, and says why if not).
-                if let Some(session) = joined.get("session").and_then(Value::as_u64) {
-                    app.ui.live.joining = Some((session, String::new()));
-                }
-            }
+            // Its file shows once it is in (the Join dialog follows it, and says why if not).
+            join(app, &target);
         }
         Some(Action::Switch(index)) => {
             if app.run("doc.switch", json!({"index": index})).is_some() {
@@ -784,11 +852,91 @@ fn apply(app: &mut FigApp, action: Option<Action>) {
     }
 }
 
+/// Do a file's menu item: open it (here or in a new tab), show it in its folder, copy its link,
+/// open it to share, duplicate, rename it or show its versions, or take it off the list. What
+/// FigCraft has no place for (favourites, folders, the trash) says so.
+fn menu_choice(app: &mut FigApp, item: CardItem, file: Chosen) {
+    let link = file.cloud.as_deref().and_then(|target| app.services.file_link(target));
+    match item {
+        CardItem::ShowInFolder => apply(app, Some(Action::Reveal(file.path))),
+        CardItem::Open => apply(app, Some(file.opening())),
+        // The browser opens this page again in another tab with the file's address; elsewhere the
+        // file opens in a tab of its own, as opening any file does.
+        CardItem::OpenInNewTab => match link {
+            Some(link) => app.services.open_url(&link),
+            None => apply(app, Some(file.opening())),
+        },
+        CardItem::Favorite => app.toast(tr("Starring isn't in FigCraft yet.")),
+        CardItem::CopyLink => {
+            let copied = link.or_else(|| file.cloud.clone()).or_else(|| (file.open.is_none_or(|o| o.saved)).then(|| file.path.clone()));
+            match copied {
+                Some(text) => {
+                    app.services.clipboard_set_text(&text);
+                    app.toast(tr("Link copied"));
+                }
+                None => app.toast(tr("This file has no link yet: it isn't saved or shared.")),
+            }
+        }
+        // A file on the account's server goes in one of its folders.
+        CardItem::Move => match (
+            file.cloud.clone().or_else(|| file.open.and_then(|o| app.session.account.recent_for_tab(o.uid)).map(|r| r.target.clone())),
+            app.session.account.account.is_some(),
+        ) {
+            (Some(target), true) => {
+                let target = &target;
+                let name = app.session.account.recents.iter().find(|r| r.target == *target).map(|r| (r.name.clone(), r.kind.clone()));
+                let folder_name = app
+                    .session
+                    .account
+                    .folder_of(target)
+                    .and_then(|f| f.files.iter().find(|x| x.target == *target))
+                    .map(|x| (x.name.clone(), x.kind.clone()));
+                let (name, kind) = name.or(folder_name).unwrap_or_else(|| (tr("Untitled").to_string(), "design".to_string()));
+                crate::home::folders::open_move(app, figcraft_engine::account::FolderFile { target: target.clone(), name, kind });
+            }
+            _ => app.toast(tr("Only files kept on your account's server go in folders: sign in and open the file there first.")),
+        },
+        CardItem::Trash => app.toast(tr("There's no trash in FigCraft yet.")),
+        CardItem::Remove => apply(app, Some(Action::Remove(file.path))),
+        CardItem::Share | CardItem::Duplicate | CardItem::VersionHistory | CardItem::Rename => {
+            let Some(then) = Then::of(item) else { return };
+            match file.opening() {
+                Action::Switch(index) => {
+                    if app.run("doc.switch", json!({"index": index})).is_some() {
+                        crate::home::home_menus::run_then(app, then);
+                    }
+                }
+                Action::Open(path) => {
+                    if app.run_user("file.open", json!({"path": path})).is_some() {
+                        crate::home::home_menus::run_then(app, then);
+                    }
+                }
+                // A file on the page's server opens once it's in: what was asked waits for it.
+                Action::Join(target) => {
+                    if let Some(session) = join(app, &target) {
+                        app.ui.home_view.then = Some((session, then));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Join a file in the account's recent files; the Join dialog follows it (and says why if it
+/// fails). Its session, if it started.
+fn join(app: &mut FigApp, target: &str) -> Option<u64> {
+    let joined = app.run_user("account.openRecent", json!({"target": target}))?;
+    let session = joined.get("session").and_then(Value::as_u64)?;
+    app.ui.live.joining = Some((session, String::new()));
+    Some(session)
+}
+
 /// The row over the files before there are any (a first run): its tabs and filters, none of the
 /// sort and view buttons.
 pub fn first_run_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     let (view, sort) = (View::of(&app.session.prefs), Sort::of(&app.session.prefs));
-    let action = toolbar(ui, t, view, sort, false, app.ui.home_view.files_filter, false);
+    let action = toolbar(ui, t, view, sort, false, app.ui.home_view.files_filter, false, true);
     apply(app, action);
 }
 
@@ -803,16 +951,18 @@ fn toolbar(
     with_created: bool,
     filter: Option<figcraft_doc::FileKind>,
     files: bool,
+    tabs: bool,
 ) -> Option<Action> {
     let mut action = None;
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
     let text_w = |ui: &Ui, s: &str, font: egui::FontId| ui.painter().layout_no_wrap(s.to_string(), font, t.text).size().x;
     let mut x = row.min.x;
-    for (label, current, tab) in [
+    let shown_tabs: &[(&str, bool, Option<Tab>)] = &[
         (tr("Recently viewed"), true, None),
         (tr("Shared files"), false, Some(Tab::SharedFiles)),
         (tr("Shared folders"), false, Some(Tab::SharedFolders)),
-    ] {
+    ];
+    for &(label, current, tab) in if tabs { shown_tabs } else { &[] } {
         let font = if current { semibold(11.0) } else { regular(11.0) };
         let r = Rect::from_min_size(pos2(x, row.min.y + 16.0), vec2(text_w(ui, label, font.clone()).ceil() + 24.0, 24.0));
         x = r.max.x + 4.0;
@@ -943,36 +1093,23 @@ fn interact(ui: &Ui, resp: &Response, recents: &mut Recents, file: &Shown) -> Op
     }
     let enter = resp.has_focus() && ui.input(|i| i.key_pressed(Key::Enter));
     // A click soon after another counts as a triple: it opens too.
-    let open = |file: &Shown| match (file.open, &file.cloud) {
-        (Some(o), _) => Action::Switch(o.index),
-        (None, Some(target)) => Action::Join(target.clone()),
-        (None, None) => Action::Open(file.path.clone()),
-    };
+    let open = |file: &Shown| Chosen::of(file).opening();
     if resp.double_clicked() || resp.triple_clicked() || enter {
         action = Some(open(file));
     } else if resp.clicked() || resp.secondary_clicked() {
         recents.selected = Some(file.path.clone());
         resp.request_focus();
     }
-    crate::right::context_popup(resp).show(|ui| {
-        if crate::right::menu_item(ui, tr("Open"), "") {
-            action = Some(open(file));
-            ui.close();
-        }
-        let on_disk = file.open.is_none_or(|o| o.saved) && file.cloud.is_none();
-        if cfg!(not(target_arch = "wasm32")) && on_disk && file.stat.is_some_and(|s| s.exists) && crate::right::menu_item(ui, reveal_label(), "") {
-            action = Some(Action::Reveal(file.path.clone()));
-            ui.close();
-        }
+    let on_disk = file.open.is_none_or(|o| o.saved) && file.cloud.is_none();
+    let menu = CardMenu {
+        reveal: reveal_label(),
+        on_disk: cfg!(not(target_arch = "wasm32")) && on_disk && file.stat.is_some_and(|s| s.exists),
         // A file that is open stays in the list until it is closed.
-        if file.open.is_none() {
-            ui.separator();
-            if crate::right::menu_item(ui, tr("Remove from recents"), "") {
-                action = Some(Action::Remove(file.path.clone()));
-                ui.close();
-            }
-        }
-    });
+        removable: file.open.is_none(),
+    };
+    if let Some(item) = crate::home::home_menus::card_menu(resp, &menu) {
+        action = Some(Action::Menu(item, Chosen::of(file)));
+    }
     action
 }
 
@@ -1087,6 +1224,9 @@ fn grid(
             let alpha = picture.as_ref().map_or(1.0, |(_, _, a)| if reduce_motion { 1.0 } else { *a });
             fading |= alpha < 1.0;
             card(CardPaint { ui, tokens: t, rect, picture_h, response: &resp, selected, file, stat, picture, alpha, now });
+            if star(ui, t, rect, &resp, &file.path) {
+                action = Some(Action::Menu(CardItem::Favorite, Chosen::of(file)));
+            }
         }
         ui.add_space(GAP);
     }
@@ -1095,6 +1235,22 @@ fn grid(
     }
     arrows(ui, recents, files, 1, columns);
     action
+}
+
+/// The star at a hovered card's top left corner (add to your favorites): whether it was clicked.
+fn star(ui: &Ui, t: &Tokens, card: Rect, card_resp: &Response, path: &str) -> bool {
+    let r = Rect::from_min_size(pos2(card.min.x + 12.0, card.min.y + 12.0), vec2(24.0, 24.0));
+    let resp = ui.interact(r, card_id(path).with("star"), Sense::click());
+    if !(card_resp.hovered() || resp.hovered() || resp.has_focus()) {
+        return false;
+    }
+    let resp = resp.on_hover_text(tr("Add to your favorites"));
+    a11y::button(&resp, tr("Add to your favorites"));
+    let p = ui.painter();
+    p.rect_filled(r, CornerRadius::same(5), if resp.hovered() { t.hover } else { t.panel });
+    p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border), StrokeKind::Inside);
+    icons::paint(p, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), Icon::Star, t.icon);
+    resp.clicked()
 }
 
 /// A card while its file is being looked at: grey blocks where the picture, icon and text go.

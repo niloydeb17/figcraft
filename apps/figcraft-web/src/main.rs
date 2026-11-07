@@ -36,6 +36,10 @@ mod account_me;
 mod account_me_tests;
 #[cfg(target_arch = "wasm32")]
 mod api;
+#[cfg(any(target_arch = "wasm32", test))]
+mod boot;
+#[cfg(test)]
+mod boot_tests;
 #[cfg(target_arch = "wasm32")]
 mod cloud;
 #[cfg(any(target_arch = "wasm32", test))]

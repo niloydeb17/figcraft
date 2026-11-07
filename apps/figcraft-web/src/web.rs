@@ -87,15 +87,16 @@ pub fn start() {
                             log::error!("couldn't install window.figcraft: {e:?}");
                         }
                     }
-                    Ok(Box::new(WebShell { fig, cloud, account: crate::account::Account::default() }))
+                    // The page stays covered until it shows what it opened for (crate::boot).
+                    let file_address = hash.starts_with("#file=") || crate::query::join_link(&hash).is_some();
+                    let cover = crate::boot::Cover::new(file_address, js_sys::Date::now());
+                    Ok(Box::new(WebShell { fig, cloud, account: crate::account::Account::default(), cover }))
                 }),
             )
             .await;
-        if let Some(el) = document.get_element_by_id(LOADING_ID) {
-            match result {
-                Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>FigCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
-            }
+        // Started, the cover stays until the page settles (`WebShell::ui`).
+        if let (Err(e), Some(el)) = (result, document.get_element_by_id(LOADING_ID)) {
+            el.set_inner_html(&format!("<p>FigCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"));
         }
     });
 }
@@ -174,6 +175,8 @@ struct WebShell {
     cloud: crate::cloud::Cloud,
     /// Who is signed in on the page's server, and the onboarding answers on their way to it.
     account: crate::account::Account,
+    /// The "Loading FigCraft…" cover, up until the first screen is the one the page opened for.
+    cover: crate::boot::Cover,
 }
 
 impl eframe::App for WebShell {
@@ -202,7 +205,8 @@ impl eframe::App for WebShell {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
         self.cloud.tick(&mut self.fig, ui.ctx());
-        self.account.tick(&mut self.fig, ui.ctx());
+        self.account.tick(&mut self.fig, ui.ctx(), self.cover.up());
+        self.uncover(ui.ctx());
         set_page_title(&self.fig);
         crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,
@@ -210,6 +214,29 @@ impl eframe::App for WebShell {
         crate::local_fonts::load_wanted(ui.ctx());
         if crate::local_fonts::take_loaded() {
             self.fig.run("text.refit", serde_json::json!({}));
+        }
+    }
+}
+
+impl WebShell {
+    /// Take the cover off once the page shows what it opened for; until then keep frames coming.
+    fn uncover(&mut self, ctx: &egui::Context) {
+        if !self.cover.up() {
+            return;
+        }
+        let (account, pictures) = self.account.progress();
+        let progress = crate::boot::Progress {
+            account,
+            pictures,
+            file_shown: self.fig.has_files() && !self.fig.ui.home,
+            joining: self.fig.session.live.iter().any(|l| matches!(l.status, figcraft_engine::live::Status::Connecting)),
+        };
+        if self.cover.frame(progress, js_sys::Date::now()) {
+            if let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id(LOADING_ID)) {
+                el.remove();
+            }
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 }
@@ -281,6 +308,23 @@ impl Services for WebServices {
     }
     fn reduce_motion(&self) -> bool {
         self.reduce_motion.as_ref().is_some_and(web_sys::MediaQueryList::matches)
+    }
+    /// `POST /logout` (the session cookie goes with it), then the sign-in page.
+    fn sign_out(&mut self) {
+        wasm_bindgen_futures::spawn_local(async {
+            if crate::account::fetch("POST", "/logout", None).await.is_none() {
+                log::warn!("/logout: the server can't be reached");
+            }
+            if let Some(Err(e)) = web_sys::window().map(|w| w.location().set_href("/login")) {
+                log::error!("couldn't go to the sign-in page: {e:?}");
+            }
+        });
+    }
+    /// This page's address with `#file=<target>` (see crate::cloud).
+    fn file_link(&self, target: &str) -> Option<String> {
+        let location = web_sys::window()?.location();
+        let (origin, path) = (location.origin().ok()?, location.pathname().ok()?);
+        Some(format!("{origin}{path}#file={}", String::from(js_sys::encode_uri_component(target))))
     }
     /// Only your name is kept ([`crate::kept`]): the rest starts afresh with each page.
     fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {

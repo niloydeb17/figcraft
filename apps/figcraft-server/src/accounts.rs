@@ -3,6 +3,7 @@
 //! `users.json` (passwords as argon2id hashes) and `sessions.json` (only hashes of session tokens).
 //! Design: `docs/accounts-design.md`.
 
+pub mod folders;
 pub mod google;
 pub mod http;
 pub mod pages;
@@ -594,6 +595,16 @@ impl Accounts {
     /// Keep `png` as the picture of `user`'s recent file `target`; the list after.
     pub fn set_recent_picture(&mut self, user: &str, target: &str, png: &[u8]) -> Result<Vec<recents::Recent>, String> {
         recents::set_picture(&self.dir, user, target, png)
+    }
+
+    /// `user`'s folders, newest first ([`folders`]).
+    pub fn folders(&self, user: &str) -> Vec<folders::Folder> {
+        folders::list(&self.dir, user)
+    }
+
+    /// Change `user`'s folders; the folders after.
+    pub fn change_folders(&mut self, user: &str, change: folders::Change) -> Result<Vec<folders::Folder>, String> {
+        folders::apply(&self.dir, user, change)
     }
 
     /// The picture `token` names in `user`'s recent files.

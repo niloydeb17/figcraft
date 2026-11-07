@@ -1033,6 +1033,26 @@ fn a_signed_in_workspace_is_the_accounts_team_with_the_plan_it_chose() {
 }
 
 #[test]
+fn only_the_free_plan_offers_an_upgrade() {
+    let mut u = first_run();
+    for (plan, upgrade) in [("starter", true), ("professional", false), ("organization", false), ("", true)] {
+        u.app
+            .session
+            .execute(
+                "account.set",
+                &json!({"signedIn": true, "email": "ada@example.com", "name": "Ada", "profile": {"plan": plan, "onboarded": true}}),
+            )
+            .unwrap();
+        let s = shapes(&mut u);
+        assert_eq!(has_text(&s, "Upgrade"), upgrade, "{plan:?}");
+    }
+    // Signed out: the free workspace.
+    u.app.session.execute("account.set", &json!({"signedIn": false})).unwrap();
+    let s = shapes(&mut u);
+    assert!(has_text(&s, "Upgrade"));
+}
+
+#[test]
 fn the_files_row_has_the_tabs_and_filters_and_each_does_what_it_can() {
     let mut u = first_run();
     let s = settle(&mut u);
@@ -1134,12 +1154,20 @@ fn a_recent_file_on_the_server_shows_the_picture_kept_of_it() {
     let images = |s: &[Shape]| s.iter().filter(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default())).count();
     let before = images(&s);
     let ctx = u.ctx.clone();
-    assert!(!u.app.set_recent_picture(&ctx, "K7M-2QX-9TD", b"not a picture"));
+    assert!(!u.app.set_recent_picture(&ctx, "K7M-2QX-9TD", b"not a picture", true));
     assert!(!u.app.ui.home_view.recents.has_cloud_picture("K7M-2QX-9TD"));
     let png = crate::home::card_picture_png(&red_frame_doc()).unwrap();
-    assert!(u.app.set_recent_picture(&ctx, "K7M-2QX-9TD", &png));
+    assert!(u.app.set_recent_picture(&ctx, "K7M-2QX-9TD", &png, true));
+    let time = ctx.input(|i| i.time);
+    let shown = |u: &Ui, t: f64| u.app.ui.home_view.recents.cloud_picture("K7M-2QX-9TD", t).map(|(_, _, a)| a);
+    assert_eq!(shown(&u, time), Some(0.0), "a first picture fades in");
     let s = settle(&mut u);
     assert_eq!(images(&s), before + 1, "the kept picture is drawn on the card");
+    // One that came while the page was still covered is there in full when it shows.
+    u.app.run("account.recents", json!({"files": [{"target": "B", "name": "Board", "kind": "design", "opened": 1_800_000_000}]}));
+    assert!(u.app.set_recent_picture(&ctx, "B", &png, false));
+    let time = ctx.input(|i| i.time);
+    assert_eq!(u.app.ui.home_view.recents.cloud_picture("B", time).map(|(_, _, a)| a), Some(1.0));
 }
 
 /// Recently viewed is newest first by when each file was last opened or viewed: an open file goes

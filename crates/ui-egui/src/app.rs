@@ -19,8 +19,8 @@ mod ime;
 impl FigApp {
     /// Show `png` (made by [`crate::home::card_picture_png`], here or on another computer) as the
     /// picture of the account's recent file `target` on Home. False for bytes that aren't a picture.
-    pub fn set_recent_picture(&mut self, ctx: &egui::Context, target: &str, png: &[u8]) -> bool {
-        self.ui.home_view.recents.set_cloud_picture(ctx, target, png)
+    pub fn set_recent_picture(&mut self, ctx: &egui::Context, target: &str, png: &[u8], fade: bool) -> bool {
+        self.ui.home_view.recents.set_cloud_picture(ctx, target, png, fade)
     }
 
     /// Show `bytes` (an image the page's server sent) as the signed-in account's picture; false
