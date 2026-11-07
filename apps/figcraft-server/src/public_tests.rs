@@ -372,6 +372,15 @@ fn forwarded_addresses_count_only_from_the_trusted_proxy() {
     assert!(matches!(via_proxy(addr, "203.0.113.9").1, ServerMsg::Refused { .. }));
     assert!(matches!(via_proxy(addr, "203.0.113.10").1, ServerMsg::Hosting(_)));
     server.stop();
+    // A proxy in a container (its address changes): a range is believed the same way.
+    c.trusted_proxy = Some("10.0.0.0/8, 127.0.0.0/8".into());
+    let mut server = crate::start(&c).unwrap();
+    let addr = server.addr();
+    let (_one, r) = via_proxy(addr, "203.0.113.1");
+    assert!(matches!(r, ServerMsg::Hosting(_)));
+    let (_two, r) = via_proxy(addr, "203.0.113.1");
+    assert!(matches!(r, ServerMsg::Refused { reason } if reason.contains("too many connections")), "the forwarded address counts");
+    server.stop();
     // Without a trusted proxy the header is anyone's to forge: the connection's own address counts.
     c.trusted_proxy = None;
     let mut server = crate::start(&c).unwrap();
@@ -480,6 +489,8 @@ fn open_mode_has_safe_defaults_and_warns_the_operator() {
     assert!(set.warnings().is_empty(), "{:?}", set.warnings());
     assert_eq!(set.file_mb(), 8);
     assert!(Config { trusted_proxy: Some("localhost".into()), ..set.clone() }.check().is_err());
+    assert!(Config { trusted_proxy: Some("10.0.0.0/8, 172.16.0.0/12".into()), ..set.clone() }.check().is_ok(), "ranges");
+    assert!(Config { trusted_proxy: Some("10.0.0.0/40".into()), ..set.clone() }.check().is_err());
     assert!(Config { terms_url: "javascript:alert(1)".into(), ..set.clone() }.check().is_err());
     // Clients keep track of at most `MAX_PEERS` others (#1121).
     let people = figcraft_collab::message::MAX_PEERS;

@@ -48,9 +48,11 @@ const USED_GRANULARITY: u64 = 60 * 60;
 pub const BAD_EMAIL: &str = "Enter a valid email address.";
 pub const SHORT_PASSWORD: &str = "Use a password of at least 8 characters.";
 pub const LONG_PASSWORD: &str = "That password is too long (256 characters at most).";
-pub const WRONG_PASSWORD: &str = "That email and password don't match.";
-pub const PAUSED: &str = "Too many wrong passwords for this account. Wait 15 minutes and try again.";
-pub const GOOGLE_ONLY: &str = "This account signs in with Google.";
+/// What a sign-in that didn't work says, whatever the reason (a wrong password, an account that
+/// signs in with Google or is turned off, no such account where sign-up is closed): one answer, so
+/// the page can't be used to find out which addresses have accounts here or how they sign in.
+pub const WRONG_PASSWORD: &str = "That email and password don't match an account here. Signed up with Google? Use Continue with Google.";
+pub const PAUSED: &str = "Too many sign-in attempts. Wait 15 minutes and try again.";
 pub const DISABLED: &str = "This account is turned off. Ask the server's operator.";
 pub const SIGNUP_CLOSED: &str = "Sign-up is closed on this server. Ask its operator for an account.";
 pub const SIGNUP_BUSY: &str = "Too many new accounts right now. Try again in a few minutes.";
@@ -384,6 +386,10 @@ impl Accounts {
     }
 
     fn google_account(&mut self, sub: &str, email: &str, name: &str) -> Result<User, String> {
+        self.transact(|me| me.google_account_now(sub, email, name))
+    }
+
+    fn google_account_now(&mut self, sub: &str, email: &str, name: &str) -> Result<User, String> {
         if let Some(u) = self.users.iter().find(|u| u.google.as_deref() == Some(sub)) {
             return if u.disabled { Err(DISABLED.into()) } else { Ok(u.clone()) };
         }
@@ -402,6 +408,10 @@ impl Accounts {
 
     /// Remember `picture` as `user`'s (what Google says now); the account as it is then.
     fn keep_picture(&mut self, user: &str, picture: &str) -> Result<User, String> {
+        self.transact(|me| me.keep_picture_now(user, picture))
+    }
+
+    fn keep_picture_now(&mut self, user: &str, picture: &str) -> Result<User, String> {
         let Some(u) = self.users.iter_mut().find(|u| u.id == user) else { return Err("no such account".into()) };
         if u.picture != picture {
             u.picture = picture.to_string();
@@ -414,6 +424,10 @@ impl Accounts {
 
     /// Sign `user` in: a new session token (only its hash is kept).
     pub fn start_session(&mut self, user: &str) -> Result<String, String> {
+        self.transact(|me| me.start_session_now(user))
+    }
+
+    fn start_session_now(&mut self, user: &str) -> Result<String, String> {
         let t = now();
         let Some(u) = self.users.iter_mut().find(|u| u.id == user) else { return Err("no such account".into()) };
         u.last_login = t;
@@ -465,10 +479,12 @@ impl Accounts {
 
     /// Sign out the session `token`.
     pub fn end_session(&mut self, token: &str) -> Result<(), String> {
-        if self.sessions.remove(&hash(token)).is_some() {
-            self.save_sessions()?;
-        }
-        Ok(())
+        self.transact(|me| {
+            if me.sessions.remove(&hash(token)).is_some() {
+                me.save_sessions()?;
+            }
+            Ok(())
+        })
     }
 
     /// Drop expired sessions.
@@ -480,6 +496,10 @@ impl Accounts {
 
     /// Set the password of `email` (a hash) and sign it out everywhere.
     pub fn set_password(&mut self, email: &str, hash: String) -> Result<(), String> {
+        self.transact(|me| me.set_password_now(email, hash))
+    }
+
+    fn set_password_now(&mut self, email: &str, hash: String) -> Result<(), String> {
         let i = self.index(email).ok_or_else(|| format!("no account for {email}"))?;
         let Some(u) = self.users.get_mut(i) else { return Err(format!("no account for {email}")) };
         u.password = Some(hash);
@@ -491,6 +511,10 @@ impl Accounts {
 
     /// Turn an account off (it is signed out) or on again.
     pub fn set_disabled(&mut self, email: &str, disabled: bool) -> Result<(), String> {
+        self.transact(|me| me.set_disabled_now(email, disabled))
+    }
+
+    fn set_disabled_now(&mut self, email: &str, disabled: bool) -> Result<(), String> {
         let i = self.index(email).ok_or_else(|| format!("no account for {email}"))?;
         let Some(u) = self.users.get_mut(i) else { return Err(format!("no account for {email}")) };
         u.disabled = disabled;
@@ -503,16 +527,23 @@ impl Accounts {
 
     /// Delete an account and its sessions.
     pub fn remove(&mut self, email: &str) -> Result<(), String> {
-        let i = self.index(email).ok_or_else(|| format!("no account for {email}"))?;
-        let u = self.users.remove(i);
-        self.sessions.retain(|_, s| s.user != u.id);
-        self.invites.retain(|x| x.by != u.id);
-        write_json(&self.dir.join(INVITES), &self.invites)?;
-        self.save()
+        self.transact(|me| {
+            let i = me.index(email).ok_or_else(|| format!("no account for {email}"))?;
+            let u = me.users.remove(i);
+            me.sessions.retain(|_, s| s.user != u.id);
+            me.invites.retain(|x| x.by != u.id);
+            // The account first: invites left behind by a failure name nobody.
+            me.save()?;
+            write_json(&me.dir.join(INVITES), &me.invites)
+        })
     }
 
     /// Change `user`'s name and onboarding answers; the account as it is now.
     pub fn update_profile(&mut self, user: &str, u: &ProfileUpdate) -> Result<User, String> {
+        self.transact(|me| me.update_profile_now(user, u))
+    }
+
+    fn update_profile_now(&mut self, user: &str, u: &ProfileUpdate) -> Result<User, String> {
         let Some(i) = self.users.iter().position(|x| x.id == user) else { return Err("no such account".into()) };
         let mut next = self.users.get(i).cloned().ok_or("no such account")?;
         if let Some(n) = &u.name {
@@ -558,6 +589,10 @@ impl Accounts {
     /// Keep `user`'s invites to `emails` (cleaned; ones already asked are skipped). The addresses
     /// kept, or why none could be.
     pub fn invite(&mut self, user: &str, emails: &[String]) -> Result<Vec<String>, String> {
+        self.transact(|me| me.invite_now(user, emails))
+    }
+
+    fn invite_now(&mut self, user: &str, emails: &[String]) -> Result<Vec<String>, String> {
         if emails.len() > INVITES_AT_ONCE {
             return Err(format!("at most {INVITES_AT_ONCE} invites at once"));
         }
@@ -644,6 +679,22 @@ impl Accounts {
     fn save(&mut self) -> Result<(), String> {
         self.save_users()?;
         self.save_sessions()
+    }
+
+    /// Run a change that ends in writing to disk: when it fails (a write didn't go through, or it
+    /// was refused part way), what is held in memory goes back to how it was, and the files are
+    /// written again from it (as far as they can be), so memory and disk agree.
+    fn transact<T>(&mut self, change: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        let before = (self.users.clone(), self.sessions.clone(), self.invites.clone(), self.failures.clone());
+        let out = change(self);
+        if out.is_err() {
+            (self.users, self.sessions, self.invites, self.failures) = before;
+            let rewritten = self.save().and_then(|()| write_json(&self.dir.join(INVITES), &self.invites));
+            if let Err(e) = rewritten {
+                log::warn!("accounts: after a failed change, the files couldn't be written back: {e}");
+            }
+        }
+        out
     }
 
     fn save_users(&self) -> Result<(), String> {

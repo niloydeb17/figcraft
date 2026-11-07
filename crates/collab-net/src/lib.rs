@@ -49,7 +49,7 @@ mod web;
 
 pub use inbox::{Inbox, Waker};
 pub use invite::{Endpoint, Invite, Lookup};
-pub use limits::NetLimits;
+pub use limits::{NetLimits, TrustedProxies};
 #[cfg(not(target_arch = "wasm32"))]
 pub use link::{DEFAULT_PORT, NetLink, lan_ip};
 #[cfg(target_arch = "wasm32")]
@@ -77,3 +77,5 @@ mod session_tests;
 mod sessions_tests;
 #[cfg(test)]
 mod tls_tests;
+#[cfg(test)]
+mod trusted_proxies_tests;

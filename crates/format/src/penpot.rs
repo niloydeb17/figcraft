@@ -379,8 +379,9 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
         // An importer never extracts members to disk, but ambiguous ZIP names can
         // cause one member to be inspected and another member to be read by name.
         // Reject duplicates and traversal instead of guessing which version is real.
-        let name = member.name();
-        if !names.insert(name.to_owned()) {
+        // A name that can't be read is as unsafe as one that escapes: refused.
+        let name = member.name().map_err(|e| corrupt(format!("unreadable ZIP member name: {e}")))?;
+        if !names.insert(name.to_string()) {
             return Err(corrupt(format!("duplicate ZIP member: {}", name.chars().take(200).collect::<String>())));
         }
         if name.starts_with('/')
@@ -445,13 +446,11 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
         inflate_budget.check()?;
         // The page index files are peers of the directories containing their layers.
         let prefix = format!("{base}/pages/");
-        let page_names: Vec<String> = z
-            .file_names()
+        let page_names: Vec<String> = crate::zip_names(&z)
             .filter(|name| {
                 name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid))
             })
             .take(501)
-            .map(str::to_owned)
             .collect();
         if page_names.len() > 500 {
             return Err(corrupt("too many pages"));
@@ -506,14 +505,12 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
                 node.plugin_data.insert("penpot.flows".into(), encoded);
             }
             let page_prefix = format!("{prefix}{page_id}/");
-            let paths: Vec<String> = z
-                .file_names()
+            let paths: Vec<String> = crate::zip_names(&z)
                 .filter(|name| {
                     name.strip_prefix(&page_prefix)
                         .is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid))
                 })
                 .take(MAX_LAYERS + 1)
-                .map(str::to_owned)
                 .collect();
             if paths.len() > MAX_LAYERS {
                 return Err(corrupt("too many layers on a page"));
@@ -1440,11 +1437,9 @@ fn bind_applied_tokens(doc: &mut Document, active_modes: &BTreeMap<String, Strin
 /// references are handled separately by `bind_applied_tokens` after shape import.
 fn import_document_colors(z: &mut ZipArchive<Cursor<&[u8]>>, base: &str, doc: &mut Document, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
     let prefix = format!("{base}/colors/");
-    let paths = z
-        .file_names()
+    let paths = crate::zip_names(z)
         .filter(|name| name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid)))
         .take(2049)
-        .map(str::to_owned)
         .collect::<Vec<_>>();
     if paths.len() > 2048 {
         warn(warnings, "Penpot color library exceeds 2048 swatches; truncated".into());
@@ -1490,11 +1485,9 @@ fn import_typography_styles(
 ) -> Vec<Value> {
     let mut custom_refs = Vec::new();
     let prefix = format!("{base}/typographies/");
-    let paths: Vec<String> = z
-        .file_names()
+    let paths: Vec<String> = crate::zip_names(z)
         .filter(|name| name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid)))
         .take(2049)
-        .map(str::to_owned)
         .collect();
     if paths.len() > 2048 {
         warn(warnings, "Penpot typography library exceeds 2048 entries; truncated".into());
@@ -2502,11 +2495,9 @@ fn component_masters(
     budget: &mut InflateBudget,
 ) -> (BTreeMap<String, String>, BTreeMap<String, String>, BTreeMap<String, String>) {
     let prefix = format!("{base}/components/");
-    let paths = z
-        .file_names()
+    let paths = crate::zip_names(z)
         .filter(|name| name.strip_prefix(&prefix).is_some_and(|part| part.len() == 41 && part.ends_with(".json") && part.get(..36).is_some_and(uuid)))
         .take(10001)
-        .map(str::to_owned)
         .collect::<Vec<_>>();
     let mut result = BTreeMap::new();
     let mut variant_names = BTreeMap::new();
@@ -4430,8 +4421,8 @@ mod tests {
         assert!(dense.len() < MAX_JSON as usize);
         for index in 0..source.len() {
             let mut member = source.by_index(index).unwrap();
-            writer.start_file(member.name(), crate::json_options()).unwrap();
-            if member.name().ends_with(&format!("/{id}.json")) {
+            writer.start_file(member.name().unwrap(), crate::json_options()).unwrap();
+            if member.name().unwrap().ends_with(&format!("/{id}.json")) {
                 writer.write_all(dense.as_bytes()).unwrap();
             } else {
                 io::copy(&mut member, &mut writer).unwrap();
@@ -4879,12 +4870,12 @@ mod tests {
             let mut e = z.by_index(i).unwrap();
             let mut content = Vec::new();
             e.read_to_end(&mut content).unwrap();
-            if e.name().ends_with(&format!("/{ROOT_ID}.json")) {
+            if e.name().unwrap().ends_with(&format!("/{ROOT_ID}.json")) {
                 let mut v: Value = serde_json::from_slice(&content).unwrap();
                 v["shapes"] = serde_json::json!([one]);
                 content = serde_json::to_vec(&v).unwrap();
             }
-            members.push((e.name().to_string(), content));
+            members.push((e.name().unwrap().to_string(), content));
         }
         drop(z);
         let cursor = Cursor::new(Vec::new());

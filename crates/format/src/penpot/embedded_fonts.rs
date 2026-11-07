@@ -6,11 +6,9 @@ use zip::ZipArchive;
 
 /// Identify unsupported fonts from signatures without decoding their payloads.
 pub(super) fn report(z: &mut ZipArchive<Cursor<&[u8]>>, warnings: &mut Vec<String>, budget: &mut InflateBudget) {
-    let names: Vec<String> = z
-        .file_names()
+    let names: Vec<String> = crate::zip_names(z)
         .filter(|n| n.starts_with("objects/") || n.starts_with("fonts/") || n.starts_with("assets/fonts/"))
         .take(MAX_ENTRIES)
-        .map(str::to_owned)
         .collect();
     let mut count = 0;
     for name in names {

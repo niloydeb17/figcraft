@@ -456,7 +456,9 @@ fn login(ctx: &Ctx, req: &Request) -> Response {
     match found {
         Lookup::Missing => {
             if !ctx.accounts().signup_open() {
-                return form_page(ctx, 403, super::SIGNUP_CLOSED, &email, &next);
+                // As a wrong password, and as slow (no account here gives nothing away).
+                password::waste(password);
+                return form_page(ctx, 401, super::WRONG_PASSWORD, &email, &next);
             }
             if let Err(e) = super::check_password(password) {
                 return form_page(ctx, 400, e, &email, &next);
@@ -486,9 +488,30 @@ fn login(ctx: &Ctx, req: &Request) -> Response {
                 form_page(ctx, 401, super::WRONG_PASSWORD, &email, &next)
             }
         }
-        Lookup::GoogleOnly => form_page(ctx, 400, super::GOOGLE_ONLY, &email, &next),
-        Lookup::Disabled => form_page(ctx, 403, super::DISABLED, &email, &next),
+        // As a wrong password, and as slow: the answer doesn't tell how an account signs in or
+        // that it is turned off.
+        Lookup::GoogleOnly | Lookup::Disabled => {
+            password::waste(password);
+            form_page(ctx, 401, super::WRONG_PASSWORD, &email, &next)
+        }
         Lookup::Paused => form_page(ctx, 429, super::PAUSED, &email, &next),
+    }
+}
+
+/// One of the [`MAX_CONNECTIONS`] connection slots, held while a connection is served and given back
+/// when dropped, however that happens.
+pub(crate) struct OpenSlot(Arc<AtomicUsize>);
+
+impl OpenSlot {
+    pub(crate) fn take(open: &Arc<AtomicUsize>) -> Self {
+        open.fetch_add(1, Ordering::SeqCst);
+        OpenSlot(open.clone())
+    }
+}
+
+impl Drop for OpenSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -728,11 +751,14 @@ impl AuthServer {
                         let _ = (&stream).write_all(&Response { status: 503, ..Default::default() }.encode());
                         continue;
                     }
-                    open.fetch_add(1, Ordering::SeqCst);
-                    let (ctx, open) = (ctx.clone(), open.clone());
+                    // The slot is given back when the guard goes: after the connection, if its
+                    // thread can't start (the closure, guard and all, is dropped then), or if
+                    // serving it panics.
+                    let slot = OpenSlot::take(&open);
+                    let ctx = ctx.clone();
                     let spawned = std::thread::Builder::new().name("accounts-conn".into()).spawn(move || {
+                        let _slot = slot;
                         serve_one(&ctx, stream);
-                        open.fetch_sub(1, Ordering::SeqCst);
                     });
                     if let Err(e) = spawned {
                         log::warn!("accounts: can't start a connection thread: {e}");

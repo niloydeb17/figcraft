@@ -39,8 +39,8 @@ pub struct NetLimits {
     /// Most connections from one address at once (an IPv6 address counts by its /64; 0: no cap).
     pub max_per_address: usize,
     /// The reverse proxy in front of a host, whose `X-Forwarded-For` names the client: only
-    /// connections from this address are believed (the header is anyone's to forge).
-    pub trusted_proxy: Option<IpAddr>,
+    /// connections from these addresses are believed (the header is anyone's to forge).
+    pub trusted_proxy: TrustedProxies,
     /// Bytes queued for one client before it counts as stuck (one message always fits an empty
     /// queue), for one block of addresses (an IPv4 address, an IPv6 /48), and for every client
     /// together (a broadcast counted once; past it the biggest consumer is dropped).
@@ -79,7 +79,7 @@ impl Default for NetLimits {
             queue: 1024,
             write_timeout: Duration::from_secs(10),
             max_per_address: 0,
-            trusted_proxy: None,
+            trusted_proxy: TrustedProxies::default(),
             max_queued_bytes: 160 << 20,
             max_queued_block: usize::MAX,
             max_queued_total: usize::MAX,
@@ -103,5 +103,73 @@ mod tests {
         // Publishing uploads a whole file; a slow link must not cut it off at the session idle
         // timeout. Keep the reply wait comfortably above it.
         assert!(d.request_reply_timeout > d.idle_timeout);
+    }
+}
+
+/// The addresses a reverse proxy may connect from: single addresses (`127.0.0.1`) or ranges
+/// (`10.0.0.0/8`, `fd00::/8`), for a proxy whose own address isn't fixed (a container's); at most
+/// [`TrustedProxies::MAX`]. Empty: no proxy is believed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrustedProxies {
+    nets: [Option<(IpAddr, u8)>; TrustedProxies::MAX],
+}
+
+impl TrustedProxies {
+    /// Most addresses and ranges kept.
+    pub const MAX: usize = 8;
+
+    /// Addresses and ranges separated by commas or spaces; why not, for anything else.
+    pub fn parse(text: &str) -> Result<TrustedProxies, String> {
+        let mut out = TrustedProxies::default();
+        for (n, item) in text.split([',', ' ', '\t']).map(str::trim).filter(|s| !s.is_empty()).enumerate() {
+            let (addr, bits) = match item.split_once('/') {
+                Some((a, b)) => (a, Some(b)),
+                None => (item, None),
+            };
+            let bad = || format!("`{item}` isn't an IP address or a range like 10.0.0.0/8");
+            let ip: IpAddr = addr.parse().map_err(|_| bad())?;
+            let ip = ip.to_canonical();
+            let max = if ip.is_ipv4() { 32 } else { 128 };
+            let bits = match bits {
+                Some(b) => b.parse::<u8>().ok().filter(|b| *b <= max).ok_or_else(bad)?,
+                None => max,
+            };
+            let slot = out.nets.get_mut(n).ok_or_else(|| format!("at most {} addresses or ranges", TrustedProxies::MAX))?;
+            *slot = Some((ip, bits));
+        }
+        Ok(out)
+    }
+
+    /// One address.
+    pub fn single(ip: IpAddr) -> TrustedProxies {
+        let ip = ip.to_canonical();
+        let mut out = TrustedProxies::default();
+        if let Some(first) = out.nets.first_mut() {
+            *first = Some((ip, if ip.is_ipv4() { 32 } else { 128 }));
+        }
+        out
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nets.iter().all(Option::is_none)
+    }
+
+    /// `ip` is one of them (an IPv4 address written as IPv6 counts as itself).
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        let ip = ip.to_canonical();
+        self.nets.iter().flatten().any(|&(net, bits)| match (net, ip) {
+            (IpAddr::V4(n), IpAddr::V4(a)) => prefix(u128::from(u32::from(n)) << 96, u128::from(u32::from(a)) << 96, bits),
+            (IpAddr::V6(n), IpAddr::V6(a)) => prefix(u128::from(n), u128::from(a), bits),
+            _ => false,
+        })
+    }
+}
+
+/// `a` and `b` (left-aligned in 128 bits) agree in their first `bits` bits.
+fn prefix(a: u128, b: u128, bits: u8) -> bool {
+    match bits {
+        0 => true,
+        1..=127 => (a ^ b) >> (128 - u32::from(bits)) == 0,
+        _ => a == b,
     }
 }

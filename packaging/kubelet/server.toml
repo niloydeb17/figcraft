@@ -17,11 +17,17 @@ max_file_mb = 64
 # environment for this compose.
 accounts_listen = "0.0.0.0:47901"
 
-# Everyone reaches the server through the same proxy address, so the per-address limits are
-# raised to team-wide ones.
+# The web container's nginx is the proxy in front: its address on the compose network changes with
+# each deploy, so the private container ranges are believed. nginx hands over the client address
+# Dokploy's Traefik forwarded (packaging/web/Dockerfile.kubelet), so the limits below are each
+# person's, not everyone's together. The server isn't reachable from outside the container networks.
+trusted_proxy = "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16"
+
+# Per person. Every file made in the browser goes to the server as it is made, so files, storage
+# and publishes are above the server's defaults; connections and messages are a busy editor's.
 max_files_per_ip = 1000
 max_mb_per_ip = 10240
-max_connections_per_ip = 512
-connects_per_minute = 600
-publishes_per_hour = 200
-messages_per_second = 2000
+max_connections_per_ip = 64
+connects_per_minute = 120
+publishes_per_hour = 100
+messages_per_second = 500

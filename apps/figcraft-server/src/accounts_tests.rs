@@ -167,9 +167,10 @@ fn closed_sign_up_only_lets_existing_accounts_in() {
     let c = ctx(&dir, false);
     let page = body(&handle(&c, &get("/login", "", None)));
     assert!(page.contains(">Log in<") && !page.contains("sign up"));
+    // No account here answers as a wrong password does: the page doesn't tell who has one.
     let r = handle(&c, &post("/login", "email=new%40example.com&password=12345678", None));
-    assert_eq!(r.status, 403);
-    assert!(body(&r).contains("Sign-up is closed"));
+    assert_eq!(r.status, 401);
+    assert!(body(&r).contains(&accounts::WRONG_PASSWORD.replace('\'', "&#39;")));
     let ok = handle(&c, &post("/login", &format!("email=di%40example.com&password={}", made.password), None));
     assert_eq!(ok.status, 303, "{}", body(&ok));
 }
@@ -188,7 +189,7 @@ fn operator_commands() {
     http::operate(&mut a, &AdminReq { action: "disable".into(), email: "ed@example.com".into(), ..AdminReq::default() }).unwrap();
     drop(a);
     let off = handle(&c, &post("/login", &format!("email=ed%40example.com&password={}", reset.password), None));
-    assert_eq!(off.status, 403);
+    assert_eq!(off.status, 401, "a turned-off account answers as a wrong password");
     let mut a = c.accounts.lock().unwrap();
     http::operate(&mut a, &AdminReq { action: "enable".into(), email: "ed@example.com".into(), ..AdminReq::default() }).unwrap();
     drop(a);
@@ -731,4 +732,92 @@ fn folders_belong_to_their_account_and_a_file_is_in_one_at_a_time() {
         handle(&c, &post_json("/auth/folders", &format!(r#"{{"create":{{"id":"n{i}"}}}}"#), &ada));
     }
     assert_eq!(Accounts::open(dir.path(), true, 21.0).unwrap().folders(&id).len(), accounts::folders::MAX);
+}
+
+/// A change whose write to disk fails leaves the accounts as they were, in memory and on disk
+/// (forced by making the accounts folder read-only; skipped where that doesn't stop writes, as for
+/// root).
+#[cfg(unix)]
+#[test]
+fn a_change_that_cant_be_written_leaves_the_accounts_as_they_were() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("acc-rollback");
+    let mut a = Accounts::open(dir.path(), true, 21.0).unwrap();
+    let u = a.create("ada@example.com", "Ada", Some(accounts::password::hash("12345678").unwrap()), None).unwrap();
+    let token = a.start_session(&u.id).unwrap();
+    a.invite(&u.id, &["bo@example.com".into()]).unwrap();
+    let folder = dir.path().join(accounts::DIR);
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::write(folder.join("probe"), b"x").is_ok() {
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    assert!(a.set_disabled("ada@example.com", true).is_err());
+    assert!(a.session(&token).is_some(), "not disabled, still signed in");
+    assert!(a.set_password("ada@example.com", accounts::password::hash("87654321").unwrap()).is_err());
+    assert!(a.session(&token).is_some(), "the password change didn't sign it out");
+    assert!(a.remove("ada@example.com").is_err());
+    assert!(a.by_email("ada@example.com").is_some(), "not removed");
+    let renamed = accounts::ProfileUpdate { name: Some("Bo".into()), ..Default::default() };
+    assert!(a.update_profile(&u.id, &renamed).is_err());
+    assert_eq!(a.by_email("ada@example.com").map(|u| u.name.as_str()), Some("Ada"));
+    assert!(a.end_session(&token).is_err());
+    assert!(a.session(&token).is_some(), "still signed in after a sign-out that wasn't kept");
+    assert!(a.invite(&u.id, &["cy@example.com".into()]).is_err());
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Disk agrees: opened again, nothing changed.
+    let mut again = Accounts::open(dir.path(), true, 21.0).unwrap();
+    let kept = again.by_email("ada@example.com").cloned().expect("still there");
+    assert!(!kept.disabled && kept.name == "Ada");
+    assert!(again.session(&token).is_some());
+    assert_eq!(again.invite(&u.id, &["bo@example.com".into()]).unwrap(), Vec::<String>::new(), "the first invite was kept, the second wasn't");
+}
+
+#[test]
+fn a_connection_slot_is_given_back_however_its_connection_ends() {
+    let open = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let load = |o: &Arc<std::sync::atomic::AtomicUsize>| o.load(std::sync::atomic::Ordering::SeqCst);
+    // Served, then done.
+    drop(http::OpenSlot::take(&open));
+    assert_eq!(load(&open), 0);
+    // A thread that never ran: the closure holding the slot is dropped.
+    let slot = http::OpenSlot::take(&open);
+    let never = move || drop(slot);
+    assert_eq!(load(&open), 1);
+    drop(never);
+    assert_eq!(load(&open), 0);
+    // A panic while serving.
+    let slot = http::OpenSlot::take(&open);
+    let joined = std::thread::spawn(move || {
+        let _slot = slot;
+        panic!("serving failed");
+    })
+    .join();
+    assert!(joined.is_err());
+    assert_eq!(load(&open), 0);
+}
+
+/// Every sign-in that fails answers the same way, so the page can't be used to learn which
+/// addresses have accounts, how they sign in or whether they are turned off.
+#[test]
+fn failed_sign_ins_all_look_the_same() {
+    let dir = TempDir::new("acc-same");
+    let mut a = Accounts::open(dir.path(), false, 21.0).unwrap();
+    let pw = http::operate(&mut a, &AdminReq { action: "add".into(), email: "pw@example.com".into(), ..AdminReq::default() }).unwrap().password;
+    http::operate(&mut a, &AdminReq { action: "add".into(), email: "off@example.com".into(), ..AdminReq::default() }).unwrap();
+    http::operate(&mut a, &AdminReq { action: "disable".into(), email: "off@example.com".into(), ..AdminReq::default() }).unwrap();
+    a.add_by_operator("g@example.com", "G", None).unwrap();
+    drop(a);
+    let c = ctx(&dir, false);
+    let answer = |email: &str, password: &str| {
+        let r = handle(&c, &post("/login", &format!("email={}&password={password}", email.replace('@', "%40")), None));
+        // The address typed is put back in the form; nothing else may differ.
+        (r.status, body(&r).replace(email, "EMAIL"))
+    };
+    let wrong = answer("pw@example.com", "not-the-password");
+    assert_eq!(wrong.0, 401);
+    for (email, why) in [("nobody@example.com", "no account"), ("off@example.com", "turned off"), ("g@example.com", "Google only")] {
+        assert_eq!(answer(email, "not-the-password"), wrong, "{why}");
+    }
+    assert_eq!(handle(&c, &post("/login", &format!("email=pw%40example.com&password={pw}"), None)).status, 303, "the right password still works");
 }

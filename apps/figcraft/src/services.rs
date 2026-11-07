@@ -384,7 +384,37 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut f = o.open(path)?;
     #[cfg(unix)]
     f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    // Windows: narrowed to the user alone before the first byte (a portable copy's folder may be
+    // readable by others). The preferences are kept even where that can't be done (a FAT stick).
+    #[cfg(windows)]
+    if let Err(e) = restrict_to_user(path) {
+        log::warn!(
+            "preferences: couldn't make {} private to you ({e}); online files' owner tokens in it are readable by whoever can read the folder",
+            path.display()
+        );
+    }
     f.write_all(bytes)
+}
+
+/// Give `path` to the current user alone: `icacls` (from the system folder, never the search path)
+/// drops inherited access and grants the user full control.
+#[cfg(windows)]
+fn restrict_to_user(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let user = std::env::var("USERNAME").map_err(|_| std::io::Error::other("USERNAME isn't set"))?;
+    let who = match std::env::var("USERDOMAIN") {
+        Ok(domain) if !domain.is_empty() => format!("{domain}\\{user}"),
+        _ => user,
+    };
+    let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let out = std::process::Command::new(system.join("System32").join("icacls.exe"))
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{who}:F"))
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if out.status.success() { Ok(()) } else { Err(std::io::Error::other(String::from_utf8_lossy(&out.stdout).trim().to_string())) }
 }
 
 thread_local! {

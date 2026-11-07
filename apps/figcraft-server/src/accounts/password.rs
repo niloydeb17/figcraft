@@ -45,6 +45,15 @@ pub fn hash(password: &str) -> Result<String, String> {
 }
 
 /// Whether `password` matches `hash` (a hash that can't be read matches nothing).
+/// Check `password` against a hash nobody's password matches, taking as long as [`verify`] does: a
+/// sign-in that fails for another reason answers as slowly as a wrong password.
+pub fn waste(password: &str) {
+    static STAND_IN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    if let Some(h) = STAND_IN.get_or_init(|| hash("a stand-in nobody signs in with").ok()) {
+        let _ = verify(password, h);
+    }
+}
+
 pub fn verify(password: &str, hash: &str) -> bool {
     let Ok(parsed) = PasswordHash::new(hash) else { return false };
     let _place = Place::take();

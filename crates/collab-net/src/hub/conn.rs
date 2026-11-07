@@ -193,7 +193,7 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
         return;
     }
     let Ok(peer) = stream.peer_addr().map(|a| a.ip().to_canonical()) else { return };
-    let proxied = limits.trusted_proxy.is_some_and(|p| p.to_canonical() == peer);
+    let proxied = limits.trusted_proxy.contains(peer);
     let Ok((mut rd, wr, sock)) = Duplex::split(stream, None) else { return };
     // The handshake and the hello must be in by the deadline, however slowly they trickle in.
     rd.read_until(Some(hello_deadline));

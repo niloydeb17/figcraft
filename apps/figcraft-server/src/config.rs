@@ -1,10 +1,10 @@
 //! The server's settings: defaults, then a TOML file (`--config server.toml`), then flags.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use figcraft_collab::message::Access;
-use figcraft_collab_net::{Endpoint, NetLimits};
+use figcraft_collab_net::{Endpoint, NetLimits, TrustedProxies};
 use serde::Deserialize;
 
 use crate::abuse::AbuseConfig;
@@ -57,7 +57,8 @@ pub struct Config {
     pub operator_contact: String,
     pub terms_url: String,
     /// The reverse proxy in front of the server (`127.0.0.1` for Caddy or nginx on the same
-    /// machine): only its `X-Forwarded-For` is believed.
+    /// machine; a range such as `10.0.0.0/8` for one in a container, whose address changes, and
+    /// several separated by commas): only its `X-Forwarded-For` is believed.
     pub trusted_proxy: Option<String>,
     /// Files published without the key are deleted after this many days without anyone opening
     /// them (0: kept; fractions allowed).
@@ -240,10 +241,10 @@ impl Config {
         a.parse().map(Some).map_err(|_| "`accounts_listen` must be an address with a port, like 0.0.0.0:47901 (empty: no accounts)".to_string())
     }
 
-    /// The trusted proxy's address, when set.
-    pub fn proxy(&self) -> Result<Option<IpAddr>, String> {
-        let Some(p) = self.trusted_proxy.as_deref().map(str::trim).filter(|p| !p.is_empty()) else { return Ok(None) };
-        p.parse().map(Some).map_err(|_| "`trusted_proxy` must be an IP address, like 127.0.0.1".to_string())
+    /// The trusted proxy's addresses (none when unset).
+    pub fn proxy(&self) -> Result<TrustedProxies, String> {
+        TrustedProxies::parse(self.trusted_proxy.as_deref().unwrap_or_default())
+            .map_err(|e| format!("`trusted_proxy`: {e} (like 127.0.0.1, or 10.0.0.0/8 for a proxy in a container)"))
     }
 
     /// Check everything (before starting).
@@ -385,7 +386,7 @@ impl Config {
     /// client and for everyone and those waiting for the hub are bounded, one-shot requests leave
     /// an eighth of the connections to sessions and are dropped after 20 idle seconds.
     pub fn net(&self) -> NetLimits {
-        let base = NetLimits { max_connections: self.max_connections, trusted_proxy: self.proxy().ok().flatten(), ..NetLimits::default() };
+        let base = NetLimits { max_connections: self.max_connections, trusted_proxy: self.proxy().unwrap_or_default(), ..NetLimits::default() };
         if !self.open_publish {
             let max = base.max_client_message.max(self.open_message());
             return NetLimits { max_client_message: max, max_queued_bytes: base.max_queued_bytes.max(max.saturating_add(1 << 20)), ..base };

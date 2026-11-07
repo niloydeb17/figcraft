@@ -347,7 +347,13 @@ terms_url = ""                              # shown under the form when set
   hashes and sessions as hashes of their tokens, in `<data>/accounts/` (`users.json`,
   `sessions.json`). The browser gets an HTTP-only, `SameSite=Lax` cookie (`Secure` when `web_url`
   is `https://`). Ten wrong passwords in 15 minutes pause an account's sign-in for 15 minutes, and
-  the whole server makes at most 120 accounts an hour. `GET /auth/me` says who is signed in.
+  the whole server makes at most 120 accounts an hour. A sign-in that fails answers the same way
+  (401, "That email and password don't match an account here…") and as slowly whatever the reason
+  (a wrong password, an account that signs in with Google or is turned off, no account where
+  sign-up is closed), so the page can't be used to learn who has an account or how they sign in; a
+  paused account says to wait. Each change to the accounts is undone in memory when it can't be
+  written to disk, so what the server holds and what it would read back agree. `GET /auth/me` says
+  who is signed in.
 - **Google.** Create an OAuth client (type *Web application*) in Google Cloud's console with the
   redirect URI `<web_url>auth/google/callback`, set `google_client_id` (or
   `FIGCRAFT_GOOGLE_CLIENT_ID` in the environment), and give the server its secret in the
@@ -430,7 +436,7 @@ are errors):
 | `open_publish` | false | Anyone may publish without the key ([a public server](#running-a-public-server)) |
 | `operator_contact` | (none) | How to reach you about abuse (an email address or a page), shown to people where they publish |
 | `terms_url` | (none) | Your terms of use (`https://…`), linked where people publish |
-| `trusted_proxy` | (none) | The reverse proxy's address (`127.0.0.1` for Caddy or nginx on the same machine): only its `X-Forwarded-For` is believed |
+| `trusted_proxy` | (none) | The reverse proxy's address (`127.0.0.1` for Caddy or nginx on the same machine), or ranges for one whose address changes (`10.0.0.0/8, 172.16.0.0/12` for a proxy container); up to 8, separated by commas: only their `X-Forwarded-For` is believed |
 | `idle_days` | 30 | Files published without the key are deleted after this many days nobody opened them (0: kept; fractions allowed) |
 | `max_total_mb` | 10240 | Publishing without the key stops while all files take this many MiB |
 | `max_files_per_ip` | 20 | Open: most files one address published without the key… |
@@ -563,7 +569,7 @@ keeps the key for everything else.
   times one address's limits, and a /48 never more than an eighth of any budget everyone shares
   (connections, queued bytes, bytes being read, publishing, downloads). Each refusal says why ("too many connections from your address…",
   "this server is full…") and the app shows it. See also [Resource limits](#resource-limits).
-  Behind a reverse proxy set `trusted_proxy` to its address: the server then counts the client its
+  Behind a reverse proxy set `trusted_proxy` to its address (or its container network's range): the server then counts the client its
   `X-Forwarded-For` names (the last address in it, the one the proxy added) and believes the header
   from no one else. The tables of addresses keep at most 10,000 addresses (the least recently seen
   go first), so floods of addresses cost bounded memory.

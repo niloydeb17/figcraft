@@ -122,7 +122,41 @@ fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     f.write_all(text.as_bytes())
 }
 
-#[cfg(not(unix))]
+/// Windows: the file is made empty, narrowed to the signed-in user alone (no inherited access, so a
+/// portable copy's folder that others can read doesn't let them read it), then written. Where that
+/// can't be done (a FAT or exFAT stick keeps no permissions) the sign-in isn't kept.
+#[cfg(windows)]
+fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, b"")?;
+    if let Err(e) = restrict_to_user(path) {
+        let _ = std::fs::remove_file(path);
+        return Err(std::io::Error::other(format!("couldn't make the sign-in file private to you ({e}): it isn't kept")));
+    }
+    std::fs::OpenOptions::new().write(true).truncate(true).open(path).and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()))
+}
+
+/// Give `path` to the current user alone: `icacls` (from the system folder, never the search path)
+/// drops inherited access and grants the user full control.
+#[cfg(windows)]
+pub(crate) fn restrict_to_user(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let user = std::env::var("USERNAME").map_err(|_| std::io::Error::other("USERNAME isn't set"))?;
+    let who = match std::env::var("USERDOMAIN") {
+        Ok(domain) if !domain.is_empty() => format!("{domain}\\{user}"),
+        _ => user,
+    };
+    let system = std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
+    let out = std::process::Command::new(system.join("System32").join("icacls.exe"))
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{who}:F"))
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if out.status.success() { Ok(()) } else { Err(std::io::Error::other(String::from_utf8_lossy(&out.stdout).trim().to_string())) }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     std::fs::write(path, text)
 }
@@ -189,6 +223,22 @@ mod tests {
         save_to(&dir, &Credentials::new("c".into(), "h".into(), tokens(10))).unwrap();
         let mode = std::fs::metadata(file_in(&dir)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows: no inherited access, only the user (what `icacls` lists for the file).
+    #[cfg(windows)]
+    #[test]
+    fn the_file_is_readable_by_the_user_alone_on_windows() {
+        let dir = temp_dir("acl");
+        save_to(&dir, &Credentials::new("c".into(), "h".into(), tokens(10))).unwrap();
+        let out = std::process::Command::new("icacls").arg(file_in(&dir)).output().unwrap();
+        let listed = String::from_utf8_lossy(&out.stdout).to_string();
+        let user = std::env::var("USERNAME").unwrap();
+        assert!(listed.contains(&user), "{listed}");
+        for other in ["Everyone", "BUILTIN\\Users", "Authenticated Users", "(I)"] {
+            assert!(!listed.contains(other), "{other} in {listed}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -968,13 +968,18 @@ mod image_budget {
         let mut zip = file(&[1, 2], &members);
         change_member_field(&mut zip, 1, 24, 1);
         let archive = Archive::open(&zip).unwrap();
-        archive.image_budget.remaining.set(members[0].1.len() as u64 - 1);
-        assert!(archive.image(&"01".repeat(20)).is_none());
-        assert_eq!(archive.image_budget.remaining.get(), 0);
-        assert_eq!(archive.image_budget.skipped.get(), 1);
+        let start = members[0].1.len() as u64 - 1;
+        archive.image_budget.remaining.set(start);
+        assert!(archive.image(&"01".repeat(20)).is_none(), "an understated size is refused");
+        // The read never goes past what is left (ZIP itself refuses a member whose bytes don't
+        // match the size it states, often before reading any); what was read stays spent.
+        let left = archive.image_budget.remaining.get();
+        assert!(left <= start, "{left} of {start}");
+        // The next image, bigger than what is left, isn't read at all.
+        let skipped = archive.image_budget.skipped.get();
         assert!(archive.image(&"02".repeat(20)).is_none());
-        assert_eq!(archive.image_budget.remaining.get(), 0);
-        assert_eq!(archive.image_budget.skipped.get(), 2);
+        assert_eq!(archive.image_budget.remaining.get(), left, "nothing read");
+        assert_eq!(archive.image_budget.skipped.get(), skipped + 1);
     }
 
     #[test]

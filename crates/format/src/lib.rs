@@ -192,6 +192,12 @@ pub struct Branch {
 }
 
 /// Whether `id` can name a version (and its archive entry).
+/// The names of `z`'s members that can be read as text (from zip 9 on, a name that doesn't decode
+/// is an error for that member alone: it is skipped, as a member nobody can ask for by name).
+pub fn zip_names<R: std::io::Read + std::io::Seek>(z: &zip::ZipArchive<R>) -> impl Iterator<Item = String> + '_ {
+    z.file_names().filter_map(Result::ok).map(std::borrow::Cow::into_owned)
+}
+
 pub fn is_valid_version_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
@@ -781,7 +787,8 @@ fn read_images<R: Read + Seek>(
     budget: ImageBudget,
     unpacked: &mut Unpacked,
 ) -> ImagesRead {
-    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).filter(|h| !h.is_empty()).map(str::to_string).collect();
+    let mut hashes: Vec<String> =
+        crate::zip_names(z).filter_map(|n| n.strip_prefix("images/").map(str::to_string)).filter(|h| !h.is_empty()).collect();
     hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
     let mut images = BTreeMap::new();
     let mut unread = Vec::new();
