@@ -48,6 +48,15 @@ fn colors(ui: &Ui, document: u64, doc: &Arc<Document>, ids: &[NodeId], interacti
     colors
 }
 
+/// Whether the section shows for `colors` of the selection `ids` (see [`section`]).
+fn shown(colors: &[SelectionColor], ids: &[NodeId]) -> bool {
+    match colors {
+        [] => false,
+        [one] => one.targets.iter().any(|t| !ids.contains(&t.id)),
+        _ => true,
+    }
+}
+
 pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, response: Option<&egui::Response>) {
     let Ok(ds) = app.session.ds() else { return };
     let target = PickerTarget::SelectionColor { targets, selection: ds.selection.clone(), document: ds.uid };
@@ -58,14 +67,16 @@ pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, response: Opti
     }
 }
 
-/// Draw the selection-colour groups (at least two): swatch opens the picker, hex and opacity
-/// edits, style/variable detach/apply/bind, and “select layers with this color”; disabled
-/// during an interaction.
+/// Draw the selection-colour groups: swatch opens the picker, hex and opacity edits,
+/// style/variable detach/apply/bind, and “select layers with this color”; disabled during an
+/// interaction. Shown as the incumbent does: for two colours or more, or for one that layers
+/// inside the selection use (a frame or group around a one-colour logo), which the Fill section
+/// can't show; one colour that is the selected layers' own fill is left to Fill.
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId]) {
     let Ok(ds) = app.session.ds() else { return };
     let interacting = ds.interaction.is_some();
     let colors = colors(ui, ds.uid, doc, ids, interacting);
-    if colors.len() < 2 {
+    if !shown(&colors, ids) {
         return;
     }
     let t = Tokens::get(ui.ctx());
@@ -290,6 +301,24 @@ mod tests {
         let Some(PickerTarget::SelectionColor { targets, .. }) = &p.app.ui.picker else { panic!("the swatch must open its picker") };
         assert_eq!(targets.iter().map(|t| t.id).collect::<Vec<_>>(), [a]);
         p.app.run("fill.set", json!({"id":b,"color":"#ff0000"}));
+        assert!(!p.frame(vec![]).iter().any(|(s, _)| s == "Selection colors"));
+    }
+
+    /// A frame around a one-colour logo lists that colour (its layers' colour, which Fill can't
+    /// show); the frame's own fill counts as one more colour.
+    #[test]
+    fn a_frame_shows_the_one_color_its_layers_use() {
+        let (mut p, a, b) = Panel::new();
+        p.app.run("fill.set", json!({"id":b,"color":"#ff0000"}));
+        let frame = p.app.run("frame.create", json!({"x":-10,"y":-10,"width":200,"height":200})).unwrap()["id"].as_u64().unwrap();
+        p.app.run("node.reparent", json!({"ids":[a.0,b.0],"parent":frame}));
+        p.app.run("select.set", json!({"ids":[frame]}));
+        p.app.run("fill.set", json!({"id":frame,"color":"#ff0000"}));
+        let texts = p.frame(vec![]);
+        assert!(texts.iter().any(|(s, _)| s == "Selection colors"), "the frame's layers' colour");
+        assert!(texts.iter().any(|(s, _)| s == "FF0000"));
+        // One layer selected with its own single colour: Fill shows it, not this section.
+        p.app.run("select.set", json!({"ids":[a.0]}));
         assert!(!p.frame(vec![]).iter().any(|(s, _)| s == "Selection colors"));
     }
 

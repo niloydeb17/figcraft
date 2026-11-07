@@ -787,17 +787,28 @@ fn pick_mode(app: &mut FigApp, i: usize) {
     }
 }
 
-/// The floating help button at the bottom right of the canvas.
+/// The help button: at the bottom right of the right sidebar, as the incumbent's (floating over
+/// it, in a layer of its own so the sidebar's contents never cover it); at the bottom right of
+/// the canvas when the sidebar is hidden.
 fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Tokens) {
-    let mut hr = Rect::from_center_size(pos2(canvas.max.x - 32.0, canvas.max.y - 32.0), vec2(32.0, 32.0));
-    // Above the pill when they'd overlap (a narrow window).
+    let corner = app.ui.right_panel_rect.filter(|p| p.width() > 64.0).map(|p| p.max).unwrap_or(canvas.max);
+    let mut hr = Rect::from_center_size(corner - vec2(28.0, 28.0), vec2(28.0, 28.0));
+    // Above the pill when they'd overlap (a narrow window, no sidebar).
     if hr.intersects(pill) {
         hr = hr.translate(vec2(0.0, -(pill.height() + 12.0)));
     }
-    let hresp = ui.interact(hr, ui.scope_id().with("help"), Sense::click()).tip(tr("Help and resources"));
-    ui.painter().circle_filled(hr.center() + vec2(0.0, 1.0), 17.0, Color32::from_black_alpha(20));
-    ui.painter().circle_filled(hr.center(), 16.0, t.panel);
-    ui.painter().text(hr.center(), Align2::CENTER_CENTER, "?", crate::theme::regular(15.0), t.text);
+    let shown = egui::Area::new(ui.scope_id().with("help_area")).order(egui::Order::Middle).fixed_pos(hr.min).show(ui.ctx(), |ui| {
+        let (r, resp) = ui.allocate_exact_size(hr.size(), Sense::click());
+        a11y::button(&resp, tr("Help and resources"));
+        let resp = resp.tip(tr("Help and resources"));
+        let fill = if resp.hovered() { t.hover } else { t.panel };
+        ui.painter().circle_filled(r.center() + vec2(0.0, 1.0), 15.0, Color32::from_black_alpha(18));
+        ui.painter().circle_filled(r.center(), 14.0, fill);
+        ui.painter().circle_stroke(r.center(), 13.5, egui::Stroke::new(1.0, t.border));
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, "?", crate::theme::regular(14.0), t.text);
+        resp
+    });
+    let hresp = shown.inner;
     crate::right::menu_popup(&hresp).show(|ui| {
         for (l, c) in [
             (tr("Getting started"), "help.gettingStarted"),

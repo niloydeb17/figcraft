@@ -74,3 +74,22 @@ fn back_to_files_lights_up_under_the_pointer_like_the_other_rows() {
     }
     assert!(lit(&mut u, vec![]), "lit under the pointer");
 }
+
+/// The help button sits at the bottom right of the right sidebar, as the incumbent's; without the
+/// sidebar (a board) at the bottom right of the canvas.
+#[test]
+fn the_help_button_is_in_the_right_sidebars_corner() {
+    let mut u = setup(false);
+    let help = |u: &mut Ui| tree(u).into_iter().find(|n| n.label() == Some("Help and resources")).map(|n| centre(&n)).expect("the help button");
+    let at = help(&mut u);
+    let panel = u.app.ui.right_panel_rect.expect("the right sidebar");
+    assert!(panel.contains(at), "{at:?} in {panel:?}");
+    assert!(panel.max.x - at.x < 40.0 && panel.max.y - at.y < 40.0, "its bottom right corner: {at:?} in {panel:?}");
+    // A board has no right sidebar: the canvas's corner.
+    u.app.run("file.newBoard", serde_json::json!({}));
+    u.frame(vec![]);
+    let at = help(&mut u);
+    assert!(u.app.ui.right_panel_rect.is_none());
+    let screen = u.ctx.content_rect();
+    assert!(screen.max.x - at.x < 48.0 && screen.max.y - at.y < 48.0, "{at:?}");
+}
